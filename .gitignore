@@ -1,0 +1,82 @@
+# Dependencies
+node_modules/
+jspm_packages/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+*.egg-info/
+.eggs/
+
+# Environment variables and secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+*.pem
+*.key
+
+# Build and dist output
+dist/
+build/
+out/
+.next/
+.nuxt/
+.output/
+*.tsbuildinfo
+
+# IDE and editor folders
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Cache folders
+.cache/
+.parcel-cache/
+.eslintcache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Coverage reports
+coverage/
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+.nyc_output/
+
+# Local database files
+*.sqlite3
+*.sqlite
+*.db
+
+# Deployment
+.serverless/
+.vercel/
+.aws-sam/
