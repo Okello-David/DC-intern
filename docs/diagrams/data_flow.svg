@@ -1,0 +1,134 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.0//EN" "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd">
+<svg viewBox="0 0 1306 914" xmlns="http://www.w3.org/2000/svg" xmlns:inkspace="http://www.inkscape.org/namespaces/inkscape" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <defs id="defs_block">
+    <filter height="1.504" id="filter_blur" inkspace:collect="always" width="1.1575" x="-0.07875" y="-0.252">
+      <feGaussianBlur id="feGaussianBlur3780" inkspace:collect="always" stdDeviation="4.2" />
+    </filter>
+  </defs>
+  <title>blockdiag</title>
+  <desc>seqdiag {
+  activation = none;
+  edge_length = 210;
+  span_height = 14;
+  default_fontsize = 12;
+
+  Student   [label = "Student\n(Browser)", color = "#DCE9F7"];
+  Frontend  [label = "React + Vite\nFrontend", color = "#D2F0E7"];
+  Backend   [label = "Django REST API\n(AWS EC2)", color = "#E8E0F5"];
+  DB        [label = "PostgreSQL\n(Amazon RDS)", color = "#FDE9D9"];
+  AI        [label = "External AI API\n(TBD)", color = "#FBE3E4"];
+  CW        [label = "Amazon\nCloudWatch", color = "#EAEAEA"];
+
+  Student  -&gt; Frontend [label = "1. Open web application"];
+  Student  -&gt; Frontend [label = "2. Create / update profile"];
+  Student  -&gt; Frontend [label = "3. Enter skills + self-assessment"];
+  Student  -&gt; Frontend [label = "4. Paste resume text / career goal"];
+  Frontend -&gt; Frontend [label = "5. Client-side validation\n(required fields, lengths)"];
+  Frontend -&gt; Backend  [label = "6. POST JSON over HTTPS"];
+  Backend  -&gt; Backend  [label = "7. Server-side validation\n+ sanitization (DRF)"];
+  Backend  -&gt; DB       [label = "8. Store profile, skills,\nresume/goal data"];
+  Backend  -&gt; Backend  [label = "9. Build structured AI prompt"];
+  Backend  -&gt; AI       [label = "10. Send prompt (HTTPS,\nkey from env vars)"];
+  Backend  &lt;- AI       [label = "11. Career advice / skill gaps /\nprojects / learning plan"];
+  Backend  -&gt; DB       [label = "12. Store recommendation\nhistory"];
+  Frontend &lt;- Backend  [label = "13. JSON response"];
+  Student  &lt;- Frontend [label = "13. Display results"];
+  Backend  -&gt; CW       [label = "14. Logs + monitoring events"];
+}
+</desc>
+  <rect fill="rgb(0,0,0)" height="40" stroke="rgb(0,0,0)" style="filter:url(#filter_blur);opacity:0.7;fill-opacity:1" width="128" x="67" y="20" />
+  <rect fill="rgb(0,0,0)" height="40" stroke="rgb(0,0,0)" style="filter:url(#filter_blur);opacity:0.7;fill-opacity:1" width="128" x="277" y="20" />
+  <rect fill="rgb(0,0,0)" height="40" stroke="rgb(0,0,0)" style="filter:url(#filter_blur);opacity:0.7;fill-opacity:1" width="128" x="487" y="20" />
+  <rect fill="rgb(0,0,0)" height="40" stroke="rgb(0,0,0)" style="filter:url(#filter_blur);opacity:0.7;fill-opacity:1" width="128" x="697" y="20" />
+  <rect fill="rgb(0,0,0)" height="40" stroke="rgb(0,0,0)" style="filter:url(#filter_blur);opacity:0.7;fill-opacity:1" width="128" x="907" y="20" />
+  <rect fill="rgb(0,0,0)" height="40" stroke="rgb(0,0,0)" style="filter:url(#filter_blur);opacity:0.7;fill-opacity:1" width="128" x="1117" y="20" />
+  <path d="M 128 54 L 128 915" fill="none" stroke="rgb(0,0,0)" stroke-dasharray="8 4" />
+  <path d="M 338 54 L 338 915" fill="none" stroke="rgb(0,0,0)" stroke-dasharray="8 4" />
+  <path d="M 548 54 L 548 915" fill="none" stroke="rgb(0,0,0)" stroke-dasharray="8 4" />
+  <path d="M 758 54 L 758 915" fill="none" stroke="rgb(0,0,0)" stroke-dasharray="8 4" />
+  <path d="M 968 54 L 968 915" fill="none" stroke="rgb(0,0,0)" stroke-dasharray="8 4" />
+  <path d="M 1178 54 L 1178 915" fill="none" stroke="rgb(0,0,0)" stroke-dasharray="8 4" />
+  <rect fill="rgb(220,233,247)" height="40" stroke="rgb(0,0,0)" width="128" x="64" y="14" />
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="48" x="128.0" y="33">Student</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="58" x="128.0" y="46">(Browser)</text>
+  <rect fill="rgb(210,240,231)" height="40" stroke="rgb(0,0,0)" width="128" x="274" y="14" />
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="75" x="338.5" y="33">React + Vite</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="53" x="338.5" y="45">Frontend</text>
+  <rect fill="rgb(232,224,245)" height="40" stroke="rgb(0,0,0)" width="128" x="484" y="14" />
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="100" x="548.0" y="34">Django REST API</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="64" x="548.0" y="47">(AWS EC2)</text>
+  <rect fill="rgb(253,233,217)" height="40" stroke="rgb(0,0,0)" width="128" x="694" y="14" />
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="69" x="758.5" y="34">PostgreSQL</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="87" x="758.5" y="47">(Amazon RDS)</text>
+  <rect fill="rgb(251,227,228)" height="40" stroke="rgb(0,0,0)" width="128" x="904" y="14" />
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="88" x="968.0" y="33">External AI API</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="34" x="968.0" y="46">(TBD)</text>
+  <rect fill="rgb(234,234,234)" height="40" stroke="rgb(0,0,0)" width="128" x="1114" y="14" />
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="49" x="1178.5" y="33">Amazon</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="72" x="1178.0" y="45">CloudWatch</text>
+  <path d="M 136 85 L 330 85" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="322,81 330,85 322,89" stroke="rgb(0,0,0)" />
+  <path d="M 136 126 L 330 126" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="322,122 330,126 322,130" stroke="rgb(0,0,0)" />
+  <path d="M 136 175 L 330 175" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="322,171 330,175 322,179" stroke="rgb(0,0,0)" />
+  <path d="M 136 228 L 330 228" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="322,224 330,228 322,232" stroke="rgb(0,0,0)" />
+  <path d="M 346 308 L 443 308" fill="none" stroke="rgb(0,0,0)" />
+  <path d="M 443 308 L 443 324" fill="none" stroke="rgb(0,0,0)" />
+  <path d="M 443 324 L 346 324" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="354,320 346,324 354,328" stroke="rgb(0,0,0)" />
+  <path d="M 346 363 L 540 363" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="532,359 540,363 532,367" stroke="rgb(0,0,0)" />
+  <path d="M 556 439 L 653 439" fill="none" stroke="rgb(0,0,0)" />
+  <path d="M 653 439 L 653 455" fill="none" stroke="rgb(0,0,0)" />
+  <path d="M 653 455 L 556 455" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="564,451 556,455 564,459" stroke="rgb(0,0,0)" />
+  <path d="M 556 511 L 750 511" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="742,507 750,511 742,515" stroke="rgb(0,0,0)" />
+  <path d="M 556 564 L 653 564" fill="none" stroke="rgb(0,0,0)" />
+  <path d="M 653 564 L 653 580" fill="none" stroke="rgb(0,0,0)" />
+  <path d="M 653 580 L 556 580" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="564,576 556,580 564,584" stroke="rgb(0,0,0)" />
+  <path d="M 556 636 L 960 636" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="952,632 960,636 952,640" stroke="rgb(0,0,0)" />
+  <path d="M 556 692 L 960 692" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="564,688 556,692 564,696" stroke="rgb(0,0,0)" />
+  <path d="M 556 745 L 750 745" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="742,741 750,745 742,749" stroke="rgb(0,0,0)" />
+  <path d="M 346 785 L 540 785" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="354,781 346,785 354,789" stroke="rgb(0,0,0)" />
+  <path d="M 136 826 L 330 826" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="144,822 136,826 144,830" stroke="rgb(0,0,0)" />
+  <path d="M 556 866 L 1170 866" fill="none" stroke="rgb(0,0,0)" />
+  <polygon fill="rgb(0,0,0)" points="1162,862 1170,866 1162,870" stroke="rgb(0,0,0)" />
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="146" x="217.0" y="81">1. Open web application</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="151" x="219.5" y="122">2. Create / update profile</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="175" x="231.5" y="160">3. Enter skills + self-assessm</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="20" x="154.0" y="171">ent</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="185" x="236.5" y="212">4. Paste resume text / career g</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="18" x="153.0" y="224">oal</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="119" x="409.5" y="263">5. Client-side valida</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="23" x="361.5" y="274">tion</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="117" x="408.5" y="289">(required fields, len</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="31" x="365.5" y="304">gths)</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="153" x="430.5" y="359">6. POST JSON over HTTPS</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="115" x="617.5" y="398">7. Server-side valid</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="30" x="575.0" y="409">ation</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="116" x="618.0" y="422">+ sanitization (DRF</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="5" x="562.5" y="435">)</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="130" x="629.0" y="492">8. Store profile, skills,</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="106" x="617.0" y="507">resume/goal data</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="115" x="617.5" y="546">9. Build structured </text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="60" x="590.0" y="560">AI prompt</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="151" x="639.5" y="617">10. Send prompt (HTTPS,</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="113" x="620.5" y="632">key from env vars)</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="183" x="864.5" y="673">11. Career advice / skill gaps /</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="138" x="887.0" y="688">projects / learning plan</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="161" x="644.5" y="726">12. Store recommendation</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="41" x="584.5" y="741">history</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="111" x="480.5" y="781">13. JSON response</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="111" x="270.5" y="822">13. Display results</text>
+  <text fill="rgb(0,0,0)" font-family="sans-serif" font-size="12" font-style="normal" font-weight="normal" text-anchor="middle" textLength="178" x="653.0" y="862">14. Logs + monitoring events</text>
+</svg>
