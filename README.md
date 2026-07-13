@@ -113,3 +113,38 @@ docs/
 ### Next Step — Week 3: MVP Development
 
 Build the first working version: profile form, skills input, resume/career-goal input, a working backend API endpoint with database persistence, and a basic frontend — committed incrementally to GitHub with a weekly report.
+
+## Week 3 — Minimum Viable Product Build
+
+### Progress
+
+- **Day 1 — Backend foundation:** Django + Django REST Framework project
+  created (`backend/`), configured with `django-cors-headers` and SQLite for
+  local development. Working health-check endpoint at `GET /api/health/`.
+- **Day 2 — Backend models and API:** `StudentProfile`, `Skill`,
+  `CareerInput`, and `Recommendation` models added, with serializers and
+  `ModelViewSet`-based CRUD endpoints (`/api/profiles/`, `/api/skills/`,
+  `/api/career-inputs/`, `/api/recommendations/`), registered in Django
+  admin.
+- **Day 3 — Frontend setup:** React + Vite project created (`frontend/`)
+  with a homepage explaining the project and workflow, plus working local
+  forms (`ProfileForm`, `SkillsForm`, `CareerInputForm`) and a live
+  `SummaryPreview`, using the same field names and choice values as the
+  backend models. Not yet connected to the API.
+- **Day 4 — Frontend-backend integration:** Connected the frontend forms
+  to the live Django API. Saving a student profile, adding a skill, and
+  adding a resume/career-goal entry now persist real records via
+  `POST /api/profiles/`, `/api/skills/`, and `/api/career-inputs/`.
+  `Home.jsx` loads existing profiles from the backend on page load and
+  shows a simple MVP workflow status (profile created / skills added /
+  career input submitted). Forms show loading, success, and error states,
+  and reset only after a successful save. Verified end to end with the
+  Django dev server and Vite dev server running together.
+
+### Up Next — Day 5
+
+Manual end-to-end testing, cleanup of frontend/backend code, finalized
+READMEs, and the Week 3 summary report.
+
+See `backend/README.md` and `frontend/README.md` for setup and run
+instructions for each half of the app.

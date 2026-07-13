@@ -12,8 +12,9 @@ Provides the MVP forms and pages a student uses to:
 4. Preview a summary of everything entered
 
 The field names and choice values in each form match the backend
-`StudentProfile`, `Skill`, and `CareerInput` models exactly, so the data is
-ready to send to the API once integration happens.
+`StudentProfile`, `Skill`, and `CareerInput` models exactly. As of Week 3
+Day 4, submitting these forms saves the data directly to the Django REST
+API — this is a working local MVP, not just a UI mockup.
 
 ## Project structure
 
@@ -52,10 +53,10 @@ npm run dev
 
 The app will be available at `http://localhost:5173/`.
 
-The backend (see `../backend/README.md`) should be running separately at
-`http://127.0.0.1:8000/` if you want the base API URL configured in
-`src/services/api.js` to eventually resolve correctly — it isn't called yet
-(see limitations below).
+**The backend must also be running** (see `../backend/README.md`) at
+`http://127.0.0.1:8000/` for the forms to save anything — see
+[Week 3 Day 4: Frontend-Backend Integration](#week-3-day-4-frontend-backend-integration)
+below for how to run both together.
 
 ## Week 3 Day 3 status
 
@@ -89,11 +90,86 @@ The backend (see `../backend/README.md`) should be running separately at
 
 ## Next step: connect frontend to backend API
 
-Week 3 Day 4 will:
+Done — see the section below.
 
-- Use `API_BASE_URL` in `src/services/api.js` to call the `/api/profiles/`,
-  `/api/skills/`, `/api/career-inputs/`, and `/api/recommendations/`
-  endpoints.
-- Persist the profile, skills, and career inputs entered in these forms to
-  the backend instead of only keeping them in local state.
-- Load and display saved data from the backend in `SummaryPreview`.
+## Week 3 Day 4: Frontend-Backend Integration
+
+### What was connected
+
+- `src/services/api.js` now exports real fetch-based helper functions
+  (`createStudentProfile`, `getStudentProfiles`, `createSkill`, `getSkills`,
+  `createCareerInput`, `getCareerInputs`, `getRecommendations`) that call
+  the Django REST API instead of just holding a base URL.
+- `ProfileForm` submits directly to the backend, shows a "Saving
+  profile..." loading state, a success or error message, resets only after
+  a successful save, and passes the created profile (with its database
+  `id`) up to `Home`.
+- `SkillsForm` and `CareerInputForm` submit to the backend using the
+  current profile's `id`. If no profile has been saved yet, they show a
+  message asking the user to save one first instead of submitting.
+- `Home.jsx` fetches existing profiles from the backend on page load (so a
+  profile created in a previous session is picked up automatically),
+  tracks the current profile and the skills/career inputs saved during the
+  current session, and renders a simple MVP workflow status (profile
+  created / skills added / career input submitted).
+- `SummaryPreview` now displays data that has actually been saved to the
+  backend, plus a note that AI-generated recommendations are coming in
+  Week 4.
+- CORS was already configured correctly in Week 3 Day 1
+  (`CORS_ALLOWED_ORIGINS` in `backend/config/settings.py` includes
+  `http://localhost:5173`), so no backend changes were needed for this.
+
+### API endpoints used
+
+| Endpoint | Used for |
+|---|---|
+| `GET /api/profiles/` | Loading existing profiles on page load |
+| `POST /api/profiles/` | Saving the student profile form |
+| `POST /api/skills/` | Saving each skill |
+| `POST /api/career-inputs/` | Saving each resume/career goal entry |
+
+`getSkills`, `getCareerInputs`, and `getRecommendations` are implemented in
+`api.js` for later use but not yet called from the UI.
+
+### How to run backend and frontend together
+
+In one terminal:
+
+```bash
+cd backend
+source venv/bin/activate
+python manage.py runserver
+```
+
+In a second terminal:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Open `http://localhost:5173/`. The page will load any existing profile from
+the backend automatically; use the forms to save a new profile, add
+skills, and add resume/career-goal entries.
+
+### Current limitations
+
+- **No routing.** Still a single page with all sections shown together.
+- **Session-scoped skills/career-input list.** The summary preview only
+  shows skills and career inputs saved *during the current browser
+  session* — it doesn't fetch a saved profile's existing skills/career
+  inputs from the backend on load (only the profile itself is loaded).
+- **No update/delete from the UI.** Only creating new records is
+  supported; editing or removing a saved profile, skill, or career input
+  requires the Django admin or API directly.
+- **Minimal validation.** Only checks that required fields are non-empty;
+  no format validation.
+- **No authentication.** Any visitor can create and view any data.
+- **No AI-generated recommendations yet** — that's Week 4.
+
+### Next step: testing, cleanup, README update, and Week 3 report
+
+- Manually re-test the full flow end to end.
+- Review and clean up the frontend and backend code.
+- Finalize README documentation for both halves of the app.
+- Write the Week 3 summary report.

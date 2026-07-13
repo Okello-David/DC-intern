@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createSkill } from '../services/api';
 
 const CATEGORY_CHOICES = [
   'Programming',
@@ -22,27 +23,56 @@ const EMPTY_SKILL = {
   evidence: '',
 };
 
-function SkillsForm({ skills, onAdd, onRemove }) {
+function SkillsForm({ studentProfileId, skills, onSkillCreated }) {
   const [skill, setSkill] = useState(EMPTY_SKILL);
+  const [status, setStatus] = useState('idle'); // idle | saving | success | error
+  const [errorMessage, setErrorMessage] = useState('');
 
   const handleChange = (event) => {
     const { name, value } = event.target;
     setSkill({ ...skill, [name]: value });
   };
 
-  const handleAdd = (event) => {
+  const isValid = skill.name.trim() !== '' && skill.category !== '' && skill.confidence_level !== '';
+
+  const handleSubmit = async (event) => {
     event.preventDefault();
-    if (!skill.name || !skill.category || !skill.confidence_level) {
+
+    if (!studentProfileId) {
+      setStatus('error');
+      setErrorMessage('Please save your student profile first.');
       return;
     }
-    onAdd(skill);
-    setSkill(EMPTY_SKILL);
+
+    if (!isValid) {
+      setStatus('error');
+      setErrorMessage('Please enter a skill name, category, and confidence level.');
+      return;
+    }
+
+    setStatus('saving');
+    setErrorMessage('');
+
+    try {
+      const createdSkill = await createSkill({ ...skill, student_profile: studentProfileId });
+      setStatus('success');
+      setSkill(EMPTY_SKILL);
+      onSkillCreated(createdSkill);
+    } catch (error) {
+      setStatus('error');
+      setErrorMessage(`Could not save skill: ${error.message}`);
+    }
   };
 
   return (
     <section className="card">
       <h2>2. Skills</h2>
-      <form className="form">
+
+      {!studentProfileId && (
+        <p className="message message-info">Save your student profile above before adding skills.</p>
+      )}
+
+      <form className="form" onSubmit={handleSubmit}>
         <label htmlFor="skill_name">Skill Name</label>
         <input
           id="skill_name"
@@ -88,21 +118,21 @@ function SkillsForm({ skills, onAdd, onRemove }) {
           placeholder="e.g. Built a Django REST API for a class project"
         />
 
-        <button type="button" className="btn" onClick={handleAdd}>
-          Add Skill
+        <button type="submit" className="btn" disabled={status === 'saving'}>
+          {status === 'saving' ? 'Saving skill...' : 'Add Skill'}
         </button>
+
+        {status === 'success' && <p className="message message-success">Skill saved successfully.</p>}
+        {status === 'error' && <p className="message message-error">{errorMessage}</p>}
       </form>
 
       {skills.length > 0 && (
         <ul className="entry-list">
-          {skills.map((entry, index) => (
-            <li key={index}>
+          {skills.map((entry) => (
+            <li key={entry.id}>
               <span>
                 <strong>{entry.name}</strong> — {entry.category} ({entry.confidence_level})
               </span>
-              <button type="button" className="btn-link" onClick={() => onRemove(index)}>
-                Remove
-              </button>
             </li>
           ))}
         </ul>

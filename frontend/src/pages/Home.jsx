@@ -1,28 +1,36 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ProfileForm from '../components/ProfileForm';
 import SkillsForm from '../components/SkillsForm';
 import CareerInputForm from '../components/CareerInputForm';
 import SummaryPreview from '../components/SummaryPreview';
-
-const EMPTY_PROFILE = {
-  full_name: '',
-  field_of_study: '',
-  year_of_study: '',
-  career_interest: '',
-  internship_goal: '',
-};
+import { getStudentProfiles } from '../services/api';
 
 function Home() {
-  const [profile, setProfile] = useState(EMPTY_PROFILE);
+  const [currentProfile, setCurrentProfile] = useState(null);
   const [skills, setSkills] = useState([]);
   const [careerInputs, setCareerInputs] = useState([]);
+  const [profilesLoading, setProfilesLoading] = useState(true);
+  const [profilesError, setProfilesError] = useState('');
 
-  const addSkill = (skill) => setSkills([...skills, skill]);
-  const removeSkill = (index) => setSkills(skills.filter((_, i) => i !== index));
+  useEffect(() => {
+    getStudentProfiles()
+      .then((profiles) => {
+        if (profiles.length > 0) {
+          setCurrentProfile(profiles[profiles.length - 1]);
+        }
+      })
+      .catch((error) => {
+        setProfilesError(`Could not load existing profiles: ${error.message}`);
+      })
+      .finally(() => setProfilesLoading(false));
+  }, []);
 
-  const addCareerInput = (entry) => setCareerInputs([...careerInputs, entry]);
-  const removeCareerInput = (index) =>
-    setCareerInputs(careerInputs.filter((_, i) => i !== index));
+  const handleProfileCreated = (profile) => {
+    setCurrentProfile(profile);
+  };
+
+  const handleSkillCreated = (skill) => setSkills([...skills, skill]);
+  const handleCareerInputCreated = (entry) => setCareerInputs([...careerInputs, entry]);
 
   return (
     <main className="page">
@@ -34,31 +42,42 @@ function Home() {
           and goals into personalized recommendations.
         </p>
 
-        <div className="status-badge">Week 3 MVP — Frontend Setup (Day 3)</div>
+        <div className="status-badge">Week 3 MVP — Frontend-Backend Integration (Day 4)</div>
 
         <div className="workflow">
-          <h2>How it works</h2>
-          <ol>
-            <li>Create your student profile</li>
-            <li>Add your skills</li>
-            <li>Add your resume text or career goal</li>
-            <li>View a summary preview</li>
+          <h2>MVP Workflow Status</h2>
+          <ol className="workflow-status">
+            <li className={currentProfile ? 'done' : ''}>
+              {currentProfile ? '✓' : '○'} Profile created
+            </li>
+            <li className={skills.length > 0 ? 'done' : ''}>
+              {skills.length > 0 ? '✓' : '○'} Skills added ({skills.length})
+            </li>
+            <li className={careerInputs.length > 0 ? 'done' : ''}>
+              {careerInputs.length > 0 ? '✓' : '○'} Resume/career input submitted (
+              {careerInputs.length})
+            </li>
           </ol>
           <p className="hint">
-            On Day 3, this page builds and previews your data locally. Saving to the
-            backend API is coming on Day 4.
+            Form submissions below are saved to the Django backend API in real time.
           </p>
+          {profilesLoading && <p className="hint">Loading existing profiles...</p>}
+          {profilesError && <p className="message message-error">{profilesError}</p>}
         </div>
       </header>
 
-      <ProfileForm profile={profile} onChange={setProfile} />
-      <SkillsForm skills={skills} onAdd={addSkill} onRemove={removeSkill} />
-      <CareerInputForm
-        careerInputs={careerInputs}
-        onAdd={addCareerInput}
-        onRemove={removeCareerInput}
+      <ProfileForm onProfileCreated={handleProfileCreated} />
+      <SkillsForm
+        studentProfileId={currentProfile?.id}
+        skills={skills}
+        onSkillCreated={handleSkillCreated}
       />
-      <SummaryPreview profile={profile} skills={skills} careerInputs={careerInputs} />
+      <CareerInputForm
+        studentProfileId={currentProfile?.id}
+        careerInputs={careerInputs}
+        onCareerInputCreated={handleCareerInputCreated}
+      />
+      <SummaryPreview profile={currentProfile} skills={skills} careerInputs={careerInputs} />
     </main>
   );
 }
