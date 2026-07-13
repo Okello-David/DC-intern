@@ -2,30 +2,35 @@
 
 This is the backend API for the project, built with **Django** and **Django REST Framework (DRF)**.
 
-For Week 3, it uses **SQLite** for local development. It will move to
+It uses **SQLite** for local development. It will move to
 **PostgreSQL / Amazon RDS** when the project is deployed to AWS in a later week.
 
-## What this backend does (Week 3 scope)
+## What this backend does
 
-- Provides the Django + DRF project skeleton (`config` project, `career` app).
-- Exposes a single health-check endpoint (`GET /api/health/`) so the frontend
-  (built later) and any teammate can confirm the API is reachable.
-- No authentication, AI integration, or deployment config yet — those are
-  planned for later weeks.
+- Django + DRF project (`config` project, `career` app) providing a REST
+  API for the student career/internship assistant.
+- A health-check endpoint (`GET /api/health/`) so the frontend or any
+  teammate can confirm the API is reachable.
+- CRUD endpoints for student profiles, skills, career/resume inputs, and
+  (eventually AI-generated) recommendations, all backed by SQLite.
+- No authentication, AI integration, or cloud deployment yet — those are
+  planned for Week 4+.
 
 ## Project structure
 
 ```
 backend/
-├── venv/              # Python virtual environment (not committed)
-├── config/             # Django project (settings, root urls)
-├── career/              # Django app (models, serializers, views, urls, admin)
+├── venv/                 # Python virtual environment (not committed)
+├── config/                # Django project (settings, root urls)
+├── career/                 # Django app: models, serializers, views, urls, admin
 ├── manage.py
 ├── requirements.txt
-└── db.sqlite3          # created after running migrations (not committed)
+└── db.sqlite3             # created after running migrations (not committed)
 ```
 
-## 1. Create and activate the virtual environment
+## Setup
+
+### 1. Create and activate the virtual environment
 
 From inside the `backend/` folder:
 
@@ -46,21 +51,21 @@ Activate it:
 
 You'll know it's active when your terminal prompt is prefixed with `(venv)`.
 
-## 2. Install dependencies
+### 2. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 3. Run database migrations
+### 3. Run database migrations
 
 ```bash
 python manage.py migrate
 ```
 
-This creates the local `db.sqlite3` file.
+This creates the local `db.sqlite3` file and applies all model migrations.
 
-## 4. Start the development server
+### 4. Start the development server
 
 ```bash
 python manage.py runserver
@@ -68,7 +73,7 @@ python manage.py runserver
 
 The API will be available at `http://127.0.0.1:8000/`.
 
-## 5. Test the health-check endpoint
+### 5. Test the health-check endpoint
 
 With the server running, in another terminal:
 
@@ -88,9 +93,7 @@ Expected response:
 
 You can also open that URL directly in a browser.
 
-## Week 3 Day 2: Backend Models and API Endpoints
-
-### Models created
+## Data Models
 
 All models live in `career/models.py` and are linked to `StudentProfile` via
 a foreign key (`on_delete=CASCADE`, so deleting a profile deletes its related
@@ -112,7 +115,7 @@ All models are registered in Django admin (`career/admin.py`) with list
 display, filters, and search — and have `__str__` methods so records are
 readable there.
 
-### API endpoints created
+## API Endpoints
 
 Built with DRF `ModelViewSet` + `DefaultRouter`, wired in `career/urls.py`
 and included under `/api/` in `config/urls.py`.
@@ -156,19 +159,22 @@ With the dev server running (`python manage.py runserver`):
   (`python manage.py createsuperuser`) and browse/edit records at
   `http://127.0.0.1:8000/admin/`.
 
-### Current limitations
+## Week 3 Status
+
+The backend is feature-complete for the Week 3 MVP: project foundation,
+all four data models, serializers, full CRUD API endpoints, admin
+registration, and CORS configured for the React frontend
+(`http://localhost:5173`). It is connected to and used by the frontend for
+creating profiles, skills, and career inputs. See
+`../docs/WEEK3_MVP_BUILD.md` for the full week summary and test checklist.
+
+## Current Limitations
 
 - No authentication — any client can read/write any record. Fine for local
   MVP work, not for deployment.
-- No AI-generated content — `Recommendation` records are created manually
-  for now; the `Placeholder` type exists for this reason. Real AI
-  integration is planned for Week 4.
+- No AI-generated content — `Recommendation` records have no producer yet;
+  the `Placeholder` type exists for manual/testing use until real AI
+  integration lands in Week 4.
 - No input validation beyond DRF/Django defaults (e.g. no server-side
   resume parsing yet).
 - SQLite only; no production database, hosting, or AWS config yet.
-
-### Next step: frontend setup
-
-Week 3 Day 3+ will scaffold the React (Vite) frontend and connect it to
-these endpoints, starting with the health-check and `StudentProfile`
-create/list flows.

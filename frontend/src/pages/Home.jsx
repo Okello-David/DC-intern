@@ -42,7 +42,7 @@ function Home() {
           and goals into personalized recommendations.
         </p>
 
-        <div className="status-badge">Week 3 MVP — Frontend-Backend Integration (Day 4)</div>
+        <div className="status-badge">Week 3 MVP — Local Build</div>
 
         <div className="workflow">
           <h2>MVP Workflow Status</h2>

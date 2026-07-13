@@ -143,15 +143,6 @@ body {
   background-color: var(--color-primary-dark);
 }
 
-.btn-link {
-  background: none;
-  border: none;
-  color: var(--color-danger);
-  cursor: pointer;
-  font-size: 0.85rem;
-  padding: 0;
-}
-
 .entry-list {
   list-style: none;
   padding: 0;

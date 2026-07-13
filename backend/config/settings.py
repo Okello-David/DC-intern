@@ -122,7 +122,7 @@ STATIC_URL = 'static/'
 
 
 # CORS
-# Allows the future React (Vite) frontend running on localhost to call this API.
+# Allows the React (Vite) frontend running on localhost to call this API.
 # https://github.com/adamchainz/django-cors-headers
 
 CORS_ALLOWED_ORIGINS = [

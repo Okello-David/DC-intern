@@ -114,37 +114,51 @@ docs/
 
 Build the first working version: profile form, skills input, resume/career-goal input, a working backend API endpoint with database persistence, and a basic frontend — committed incrementally to GitHub with a weekly report.
 
-## Week 3 — Minimum Viable Product Build
+## Week 3 Status: Minimum Viable Product Build
 
-### Progress
+Week 3 delivered a working local MVP: a Django REST API backend with real
+data persistence, a React frontend with working forms, and a full
+frontend-backend integration — all running locally against SQLite.
 
-- **Day 1 — Backend foundation:** Django + Django REST Framework project
-  created (`backend/`), configured with `django-cors-headers` and SQLite for
-  local development. Working health-check endpoint at `GET /api/health/`.
-- **Day 2 — Backend models and API:** `StudentProfile`, `Skill`,
-  `CareerInput`, and `Recommendation` models added, with serializers and
+### Deliverables Completed
+
+- [x] **Backend foundation** — Django + Django REST Framework project
+  (`backend/`), configured with `django-cors-headers` and SQLite for local
+  development
+- [x] **Health-check API** — `GET /api/health/` confirms the backend is
+  reachable
+- [x] **Models and API endpoints** — `StudentProfile`, `Skill`,
+  `CareerInput`, and `Recommendation` models, with serializers,
   `ModelViewSet`-based CRUD endpoints (`/api/profiles/`, `/api/skills/`,
-  `/api/career-inputs/`, `/api/recommendations/`), registered in Django
-  admin.
-- **Day 3 — Frontend setup:** React + Vite project created (`frontend/`)
-  with a homepage explaining the project and workflow, plus working local
-  forms (`ProfileForm`, `SkillsForm`, `CareerInputForm`) and a live
-  `SummaryPreview`, using the same field names and choice values as the
-  backend models. Not yet connected to the API.
-- **Day 4 — Frontend-backend integration:** Connected the frontend forms
-  to the live Django API. Saving a student profile, adding a skill, and
-  adding a resume/career-goal entry now persist real records via
-  `POST /api/profiles/`, `/api/skills/`, and `/api/career-inputs/`.
-  `Home.jsx` loads existing profiles from the backend on page load and
-  shows a simple MVP workflow status (profile created / skills added /
-  career input submitted). Forms show loading, success, and error states,
-  and reset only after a successful save. Verified end to end with the
-  Django dev server and Vite dev server running together.
+  `/api/career-inputs/`, `/api/recommendations/`), and Django admin
+  registration
+- [x] **React frontend** — created with Vite (`frontend/`), homepage
+  explaining the project, purpose, and user workflow
+- [x] **Frontend forms** — `ProfileForm`, `SkillsForm`, `CareerInputForm`,
+  and a live `SummaryPreview`, using the same field names and choice
+  values as the backend models
+- [x] **Frontend-backend integration** — forms submit directly to the
+  Django API with loading, success, and error states; the app loads
+  existing profiles from the backend on page load and tracks a simple MVP
+  workflow status (profile created / skills added / career input
+  submitted)
+- [x] **Local MVP works end to end** — a student can create a profile, add
+  skills, and submit resume/career-goal input, all persisted to the local
+  database and verifiable via the Django REST API
+- [x] **Testing, cleanup, and documentation** — manual end-to-end test
+  pass, small code cleanup, and finalized documentation across the root,
+  backend, and frontend READMEs plus `docs/WEEK3_MVP_BUILD.md`
 
-### Up Next — Day 5
-
-Manual end-to-end testing, cleanup of frontend/backend code, finalized
-READMEs, and the Week 3 summary report.
+### Repository Documentation
 
 See `backend/README.md` and `frontend/README.md` for setup and run
-instructions for each half of the app.
+instructions for each half of the app, and `docs/WEEK3_MVP_BUILD.md` for
+the full Week 3 summary, testing checklist, and weekly report.
+
+### Next Step — Week 4: AI Integration and AWS Deployment
+
+Integrate an API-based AI provider to generate real recommendations
+(skill gap analysis, career path suggestions, project ideas, learning
+plans) from a student's profile, skills, and career inputs, and begin AWS
+deployment — moving from SQLite to PostgreSQL/Amazon RDS and deploying the
+backend and frontend per the plan in `docs/WEEK2_SYSTEM_DESIGN.md`.
