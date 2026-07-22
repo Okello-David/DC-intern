@@ -3,6 +3,7 @@ import ProfileForm from '../components/ProfileForm';
 import SkillsForm from '../components/SkillsForm';
 import CareerInputForm from '../components/CareerInputForm';
 import SummaryPreview from '../components/SummaryPreview';
+import AIRecommendationPanel from '../components/AIRecommendationPanel';
 import { getStudentProfiles } from '../services/api';
 
 function Home() {
@@ -42,7 +43,7 @@ function Home() {
           and goals into personalized recommendations.
         </p>
 
-        <div className="status-badge">Week 3 MVP — Local Build</div>
+        <div className="status-badge">Week 4 — Local Build with AI-Assisted Skill Gap Analysis</div>
 
         <div className="workflow">
           <h2>MVP Workflow Status</h2>
@@ -78,6 +79,7 @@ function Home() {
         onCareerInputCreated={handleCareerInputCreated}
       />
       <SummaryPreview profile={currentProfile} skills={skills} careerInputs={careerInputs} />
+      <AIRecommendationPanel profile={currentProfile} />
     </main>
   );
 }

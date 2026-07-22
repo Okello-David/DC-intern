@@ -12,20 +12,32 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 
+from decouple import Csv, config
+from django.core.exceptions import ImproperlyConfigured
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-+*(=#!s#0564**!udq(4b=k67bqcr46vws*s*#0n_9dl(+zvh%'
+# Settings that differ between machines (local laptop, AWS EC2) are read from
+# environment variables via python-decouple, which reads `backend/.env` first
+# and falls back to real environment variables. `.env` is git-ignored; see
+# `.env.example` for the list of variables the project expects.
+# No secret is ever hard-coded in this file.
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = config('DEBUG', default=True, cast=bool)
 
-ALLOWED_HOSTS = []
+# SECURITY WARNING: keep the secret key used in production secret!
+# A throwaway key is allowed for local development only. With DEBUG off (any
+# real deployment) a SECRET_KEY must be supplied by the environment, so a
+# misconfigured server fails loudly instead of running on a public default.
+SECRET_KEY = config('SECRET_KEY', default='' if not DEBUG else 'django-insecure-local-development-only-key')
+if not SECRET_KEY:
+    raise ImproperlyConfigured(
+        'SECRET_KEY environment variable is required when DEBUG is False.'
+    )
+
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='127.0.0.1,localhost', cast=Csv())
 
 
 # Application definition
@@ -75,6 +87,10 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
+#
+# SQLite is still used for local Week 4 Day 2 work. Moving to PostgreSQL on
+# Amazon RDS is the next step (Week 4 Day 3+) and will read its credentials
+# from environment variables in the same way as the settings above.
 
 DATABASES = {
     'default': {
@@ -122,10 +138,36 @@ STATIC_URL = 'static/'
 
 
 # CORS
-# Allows the React (Vite) frontend running on localhost to call this API.
+# Allows the React (Vite) frontend to call this API. Locally that is the Vite
+# dev server; after deployment it will be the deployed frontend's origin, set
+# through the CORS_ALLOWED_ORIGINS environment variable.
 # https://github.com/adamchainz/django-cors-headers
 
-CORS_ALLOWED_ORIGINS = [
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-]
+CORS_ALLOWED_ORIGINS = config(
+    'CORS_ALLOWED_ORIGINS',
+    default='http://localhost:5173,http://127.0.0.1:5173',
+    cast=Csv(),
+)
+
+
+# AI provider
+# The backend is the only component that talks to an AI provider, so the API
+# key stays server-side and never reaches the browser. `mock` means "no
+# external call" — the service layer returns a structured local analysis so the
+# feature is demonstrable offline and at zero cost.
+
+AI_PROVIDER = config('AI_PROVIDER', default='mock')
+AI_API_KEY = config('AI_API_KEY', default='')
+AI_MODEL = config('AI_MODEL', default='mock-local')
+
+
+# Deployment hardening
+# These apply only when DEBUG is off, so local development is unaffected.
+# HTTPS redirect / HSTS are deliberately left out until TLS is terminated in
+# front of the app on AWS (Week 4 Day 3+).
+
+if not DEBUG:
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    X_FRAME_OPTIONS = 'DENY'

@@ -162,3 +162,60 @@ Integrate an API-based AI provider to generate real recommendations
 plans) from a student's profile, skills, and career inputs, and begin AWS
 deployment — moving from SQLite to PostgreSQL/Amazon RDS and deploying the
 backend and frontend per the plan in `docs/WEEK2_SYSTEM_DESIGN.md`.
+
+## Week 4 Status: AI Feature and Deployment Preparation
+
+Week 4 moves the project from "a working local MVP" to "an application that
+produces AI-assisted recommendations and is configured to be deployed." Days 1
+and 2 are complete; AWS deployment is next.
+
+### Day 1 — AWS account prepared safely
+
+Before provisioning anything, the AWS account was secured: **MFA enabled** on
+the root account, a **budget alert** created so spending cannot escalate
+unnoticed, the available **AWS credit** checked, and a named **AWS CLI profile**
+configured for local use. No billable resources were created.
+
+### Day 2 — Environment variables and the first AI feature
+
+- **Environment-driven configuration.** Added `python-decouple`, and moved
+  `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, and the AI
+  provider settings into environment variables. `backend/.env.example`
+  documents every variable with placeholders; the real `.env` is git-ignored and
+  never committed. With `DEBUG=False` and no `SECRET_KEY`, Django now refuses to
+  start rather than falling back to a public default.
+- **Backend AI service layer.** `backend/career/services/ai_service.py` is the
+  single place in the project allowed to talk to an AI provider. It is
+  provider-agnostic, so swapping OpenAI / Gemini / Anthropic later touches one
+  file.
+- **Skill Gap Analysis added locally.** `POST /api/profiles/<id>/generate-skill-gap/`
+  gathers a student's skills and career inputs, generates an analysis (career
+  readiness summary, strengths, missing technical skills, missing professional
+  skills, suggested projects, a 4-week learning plan, and limitations), saves it
+  as a `Recommendation`, and returns it. Skill gap analysis was chosen first
+  because it answers the exact question in the problem statement and needs no
+  new data models.
+- **Safe local fallback.** With `AI_PROVIDER=mock` the backend produces the
+  analysis locally with no external call — the feature is fully demonstrable
+  offline, at zero cost, with no student data leaving the machine. The API
+  reports `used_fallback: true` so the mode is never ambiguous.
+- **Frontend requests AI recommendations through the backend.** A new
+  `AIRecommendationPanel.jsx` adds a "Generate Skill Gap Analysis" button with
+  loading and error states. The frontend calls **only** the Django API — it holds
+  no AI key and never contacts an AI provider, because anything in a React
+  bundle is public the moment the page loads.
+- **Tested.** 12 automated tests cover the health endpoint, the Week 3 CRUD
+  endpoints, the new endpoint, the 404 case, the empty-profile case, and the AI
+  service's fallback behaviour. All Week 3 features still work.
+
+Full write-up, request-flow diagram, and testing checklist:
+[`docs/WEEK4_AI_AND_DEPLOYMENT.md`](docs/WEEK4_AI_AND_DEPLOYMENT.md)
+
+### Next Step — AWS deployment
+
+Provision PostgreSQL on Amazon RDS and read its credentials from the
+environment using the pattern established on Day 2, then deploy the Django
+backend to a hardened EC2 instance behind Gunicorn and Nginx with `DEBUG=False`,
+serve the React production build, attach a least-privilege IAM role, and ship
+logs to CloudWatch. Connecting a real, paid AI provider comes after a spending
+cap and rate limiting are in place.

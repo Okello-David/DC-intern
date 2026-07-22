@@ -143,6 +143,30 @@ body {
   background-color: var(--color-primary-dark);
 }
 
+.btn:disabled {
+  background-color: var(--color-muted);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.recommendation {
+  margin-top: 1.25rem;
+}
+
+.recommendation-content {
+  margin: 0.75rem 0 0;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background-color: #f8fafc;
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
 .entry-list {
   list-style: none;
   padding: 0;

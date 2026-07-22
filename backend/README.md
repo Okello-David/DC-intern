@@ -12,19 +12,26 @@ It uses **SQLite** for local development. It will move to
 - A health-check endpoint (`GET /api/health/`) so the frontend or any
   teammate can confirm the API is reachable.
 - CRUD endpoints for student profiles, skills, career/resume inputs, and
-  (eventually AI-generated) recommendations, all backed by SQLite.
-- No authentication, AI integration, or cloud deployment yet — those are
-  planned for Week 4+.
+  recommendations, all backed by SQLite.
+- An AI service layer plus a **Skill Gap Analysis** endpoint (Week 4) that
+  generates a recommendation from a student's profile, skills, and career
+  inputs. The AI provider is called **server-side only**.
+- Configuration read from environment variables, so no secret is hard-coded.
+- No authentication or cloud deployment yet — those are planned for Week 4+.
 
 ## Project structure
 
 ```
 backend/
-├── venv/                 # Python virtual environment (not committed)
+├── venv/                  # Python virtual environment (not committed)
 ├── config/                # Django project (settings, root urls)
-├── career/                 # Django app: models, serializers, views, urls, admin
+├── career/                # Django app: models, serializers, views, urls, admin
+│   └── services/
+│       └── ai_service.py  # the only module that talks to an AI provider
 ├── manage.py
 ├── requirements.txt
+├── .env.example           # documented placeholders (committed)
+├── .env                   # real values (git-ignored, never committed)
 └── db.sqlite3             # created after running migrations (not committed)
 ```
 
@@ -57,7 +64,46 @@ You'll know it's active when your terminal prompt is prefixed with `(venv)`.
 pip install -r requirements.txt
 ```
 
-### 3. Run database migrations
+### 3. Configure environment variables
+
+Settings that change between machines (local laptop vs. AWS server) are read
+from environment variables using
+[`python-decouple`](https://pypi.org/project/python-decouple/), which reads
+`backend/.env` first and falls back to real environment variables. **No secret
+is hard-coded in `settings.py`.**
+
+`.env.example` is committed and lists every variable the project expects, with
+placeholder values only. `.env` holds real values and is git-ignored — never
+commit it.
+
+```bash
+cp .env.example .env
+```
+
+The defaults work for local development as-is, so this step is optional today;
+it becomes mandatory on deployment.
+
+| Variable | Purpose | Default if unset |
+|---|---|---|
+| `DEBUG` | Django debug mode. Must be `False` in deployment. | `True` |
+| `SECRET_KEY` | Django signing key. | dev-only placeholder (allowed only while `DEBUG=True`) |
+| `ALLOWED_HOSTS` | Comma-separated hostnames Django will serve. | `127.0.0.1,localhost` |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated frontend origins allowed to call the API. | `http://localhost:5173,http://127.0.0.1:5173` |
+| `AI_PROVIDER` | AI implementation to use. `mock` = local fallback, no network call. | `mock` |
+| `AI_API_KEY` | Provider API key. **Server-side only** — never sent to the frontend. | *(empty)* |
+| `AI_MODEL` | Model identifier passed to the provider. | `mock-local` |
+
+Two safety behaviours are built in:
+
+- With `DEBUG=False` and no `SECRET_KEY`, Django refuses to start rather than
+  falling back to a public default. Verify with:
+  ```bash
+  DEBUG=False python manage.py check   # expect ImproperlyConfigured
+  ```
+- With `DEBUG=False`, secure cookie and content-type-nosniff settings switch on
+  automatically.
+
+### 4. Run database migrations
 
 ```bash
 python manage.py migrate
@@ -65,7 +111,7 @@ python manage.py migrate
 
 This creates the local `db.sqlite3` file and applies all model migrations.
 
-### 4. Start the development server
+### 5. Start the development server
 
 ```bash
 python manage.py runserver
@@ -73,7 +119,7 @@ python manage.py runserver
 
 The API will be available at `http://127.0.0.1:8000/`.
 
-### 5. Test the health-check endpoint
+### 6. Test the health-check endpoint
 
 With the server running, in another terminal:
 
@@ -131,6 +177,102 @@ and included under `/api/` in `config/urls.py`.
 | `/api/career-inputs/<id>/` | `GET`, `PUT`, `PATCH`, `DELETE` |
 | `/api/recommendations/` | `GET`, `POST` |
 | `/api/recommendations/<id>/` | `GET`, `PUT`, `PATCH`, `DELETE` |
+| `/api/profiles/<id>/generate-skill-gap/` | `POST` |
+
+## Skill Gap Analysis Endpoint (Week 4)
+
+```
+POST /api/profiles/<id>/generate-skill-gap/
+```
+
+No request body is needed — the profile id in the URL is enough. The view
+(`StudentProfileViewSet.generate_skill_gap`) loads the profile's `Skill` and
+`CareerInput` records, calls
+`career/services/ai_service.py::generate_skill_gap_analysis()`, saves the result
+as a `Recommendation` with `recommendation_type="Skill Gap Analysis"`, and
+returns it.
+
+Response (`201 Created`):
+
+```json
+{
+  "profile_id": 1,
+  "recommendation_id": 3,
+  "recommendation_type": "Skill Gap Analysis",
+  "content": "SKILL GAP ANALYSIS\nStudent: ...",
+  "created_at": "2026-07-22T10:31:57.802323Z",
+  "ai_provider": "mock",
+  "ai_model": "mock-local",
+  "used_fallback": true,
+  "notes": []
+}
+```
+
+The analysis content has seven sections: career readiness summary, strengths,
+missing technical skills, missing professional skills, suggested projects, a
+4-week learning plan, and limitations.
+
+### Error handling
+
+| Situation | Response |
+|---|---|
+| Profile id does not exist | `404` with a JSON `detail` message |
+| Profile has no skills and/or no career inputs | `201` — a limited analysis is still generated, and `notes` explains what was missing |
+| Configured AI provider fails or is unavailable | `503` with a readable `error` message — never a traceback |
+| Any other unexpected error | `500` with a generic `error` message; the full traceback is logged server-side only |
+
+### Mock mode and the API key rule
+
+`AI_PROVIDER=mock` (the default) makes **no external network call**. The service
+layer builds the analysis locally from the student's own data, so the feature
+works offline, costs nothing, and sends no student data to a third party.
+`used_fallback: true` in the response says so honestly.
+
+The same fallback is used if `AI_PROVIDER` names a real provider but `AI_API_KEY`
+is empty — a misconfiguration degrades to a working demo instead of an error.
+
+**The AI API key is read from the server environment and used only inside
+`ai_service.py`. It is never returned by the API and never reaches the browser.**
+A key in frontend code is public the moment the page loads: it can be read from
+the network tab or the built JavaScript, and any resulting API charges land on
+this project's account.
+
+### How to test it locally
+
+```bash
+# 1. Create a profile and note its id
+curl -X POST http://127.0.0.1:8000/api/profiles/ \
+  -H "Content-Type: application/json" \
+  -d '{"full_name":"Jane Doe","field_of_study":"Software Engineering","year_of_study":"Year 3","career_interest":"Cloud Engineering","internship_goal":"AWS cloud internship"}'
+
+# 2. Add a skill and a career input for that profile (replace 1 with the id)
+curl -X POST http://127.0.0.1:8000/api/skills/ \
+  -H "Content-Type: application/json" \
+  -d '{"student_profile":1,"name":"Linux command line","category":"Cloud Computing","confidence_level":"Intermediate","evidence":"Daily Ubuntu use"}'
+
+curl -X POST http://127.0.0.1:8000/api/career-inputs/ \
+  -H "Content-Type: application/json" \
+  -d '{"student_profile":1,"input_type":"Career Goal","content":"Become an AWS cloud engineer"}'
+
+# 3. Generate the analysis
+curl -X POST http://127.0.0.1:8000/api/profiles/1/generate-skill-gap/
+
+# 4. Confirm it was saved
+curl http://127.0.0.1:8000/api/recommendations/
+
+# 5. Confirm a missing profile returns 404
+curl -i -X POST http://127.0.0.1:8000/api/profiles/99999/generate-skill-gap/
+```
+
+### Automated tests
+
+```bash
+python manage.py test
+```
+
+12 tests in `career/tests.py` cover the health endpoint, the Week 3 CRUD
+endpoints, the skill-gap endpoint (structure, saved record, own-data content),
+the 404 case, the empty-profile case, and the AI service's fallback behaviour.
 
 ### How to test the endpoints
 
@@ -168,13 +310,26 @@ registration, and CORS configured for the React frontend
 creating profiles, skills, and career inputs. See
 `../docs/WEEK3_MVP_BUILD.md` for the full week summary and test checklist.
 
+## Week 4 Day 2 Status
+
+Added environment-driven configuration (`python-decouple`, `.env.example`), an
+AI service layer, and the first AI feature: the Skill Gap Analysis endpoint,
+running in local mock mode with automated tests. Nothing is deployed to AWS yet.
+See `../docs/WEEK4_AI_AND_DEPLOYMENT.md`.
+
 ## Current Limitations
 
-- No authentication — any client can read/write any record. Fine for local
-  MVP work, not for deployment.
-- No AI-generated content — `Recommendation` records have no producer yet;
-  the `Placeholder` type exists for manual/testing use until real AI
-  integration lands in Week 4.
+- No authentication — any client can read/write any record, and any client can
+  generate an analysis for any profile. Fine for local MVP work, not for
+  deployment.
+- No real AI provider connected — `AI_PROVIDER=mock` returns a rule-based local
+  analysis. `_call_provider()` in `ai_service.py` is a documented stub, so
+  adding a provider is a single-function change.
+- Only one recommendation type has a producer. `Career Path`,
+  `Project Recommendation`, `Learning Plan`, and `Resume Feedback` remain
+  unimplemented.
+- No rate limiting on the skill-gap endpoint — required before a paid provider
+  is connected.
 - No input validation beyond DRF/Django defaults (e.g. no server-side
   resume parsing yet).
 - SQLite only; no production database, hosting, or AWS config yet.

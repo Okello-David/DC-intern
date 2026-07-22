@@ -9,7 +9,11 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    const message = body ? JSON.stringify(body) : `Request failed with status ${response.status}`;
+    // The backend sends readable messages in `error` (our own views) or
+    // `detail` (DRF defaults, e.g. 404); fall back to the raw body otherwise.
+    const message =
+      body?.error || body?.detail || (body ? JSON.stringify(body) : null) ||
+      `Request failed with status ${response.status}`;
     throw new Error(message);
   }
 
@@ -55,4 +59,13 @@ export function createCareerInput(careerInputData) {
 
 export function getRecommendations() {
   return request('/recommendations/');
+}
+
+// Asks the Django backend to generate a skill gap analysis for one profile.
+// The AI provider is called by the backend only — the browser never sees the
+// AI API key, and this app never talks to an AI provider directly.
+export function generateSkillGapAnalysis(profileId) {
+  return request(`/profiles/${profileId}/generate-skill-gap/`, {
+    method: 'POST',
+  });
 }

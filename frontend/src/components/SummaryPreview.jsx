@@ -52,8 +52,9 @@ function SummaryPreview({ profile, skills, careerInputs }) {
       )}
 
       <p className="hint hint-note">
-        AI-generated recommendations (skill gap analysis, career path suggestions, project
-        ideas, learning plans) will be added in Week 4 once AI integration begins.
+        Use the AI Recommendation panel below to generate a skill gap analysis from this
+        data. Career path suggestions, project ideas, and learning plans follow later in
+        Week 4.
       </p>
     </section>
   );
