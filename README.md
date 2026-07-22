@@ -167,7 +167,7 @@ backend and frontend per the plan in `docs/WEEK2_SYSTEM_DESIGN.md`.
 
 Week 4 moves the project from "a working local MVP" to "an application that
 produces AI-assisted recommendations and is configured to be deployed." Days 1
-and 2 are complete; AWS deployment is next.
+to 3 are complete; deploying to EC2 is next.
 
 ### Day 1 — AWS account prepared safely
 
@@ -208,14 +208,48 @@ configured for local use. No billable resources were created.
   endpoints, the new endpoint, the 404 case, the empty-profile case, and the AI
   service's fallback behaviour. All Week 3 features still work.
 
-Full write-up, request-flow diagram, and testing checklist:
+### Day 3 — Private Amazon RDS PostgreSQL prepared
+
+- **A custom VPC with a public application tier and a private database tier.**
+  The EC2 application subnets are public; the database subnets are private,
+  spread across two Availability Zones (required for an RDS subnet group, and a
+  prerequisite for Multi-AZ failover later).
+- **The RDS PostgreSQL instance is private.** Public accessibility is disabled
+  and it sits only in the private subnets, which have no route to the Internet
+  Gateway — there is no path from the internet to the database, not merely a
+  blocked one.
+- **The RDS security group accepts PostgreSQL (TCP 5432) only from the EC2
+  application security group.** Access is granted by security-group identity
+  rather than by IP range, so only instances that join the application group can
+  reach the database, whatever their address. A consequence worth stating plainly:
+  the RDS endpoint **cannot** be reached from a local laptop, and that is the
+  design working, not a fault to debug.
+- **PostgreSQL environment-variable support added to Django.** `psycopg[binary]`
+  was added, and `DB_HOST` now acts as a single switch: empty means the local
+  SQLite file (unchanged local workflow), set means PostgreSQL on RDS using
+  `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_PORT` (default `5432`), and
+  `DB_SSLMODE` (default `require`). No endpoint, username, password, or database
+  name is hard-coded anywhere. If `DB_HOST` is set but a credential is missing,
+  Django refuses to start instead of silently falling back to SQLite.
+- **A `python manage.py check_database` diagnostic command** reports the
+  configured engine and runs `SELECT 1`. It never prints the database password,
+  masks the host by default, and gives a readable failure message — it will be
+  the first command run on EC2 to tell a configuration problem apart from a
+  network one.
+- **Tested without touching AWS.** 26 automated tests now cover the database
+  selection rule and the diagnostic command alongside the existing AI feature —
+  none of them require a database server, an RDS instance, or network access.
+  Nothing was deployed and no connection to RDS was attempted.
+
+Full write-up, network diagram, request-flow diagram, and testing checklist:
 [`docs/WEEK4_AI_AND_DEPLOYMENT.md`](docs/WEEK4_AI_AND_DEPLOYMENT.md)
 
-### Next Step — AWS deployment
+### Next Step — Day 4: Database migration to RDS and EC2 deployment
 
-Provision PostgreSQL on Amazon RDS and read its credentials from the
-environment using the pattern established on Day 2, then deploy the Django
-backend to a hardened EC2 instance behind Gunicorn and Nginx with `DEBUG=False`,
-serve the React production build, attach a least-privilege IAM role, and ship
-logs to CloudWatch. Connecting a real, paid AI provider comes after a spending
-cap and rate limiting are in place.
+Launch and harden the EC2 instance in the application subnet, set the
+environment variables on the server, and — **from inside the VPC, the only place
+the database is reachable from** — run `check_database` and then
+`python manage.py migrate` to create the schema on RDS. After that: Gunicorn and
+Nginx in front of Django, the React production build served, a least-privilege
+IAM role attached, and logs shipped to CloudWatch. Connecting a real, paid AI
+provider comes last, after a spending cap and rate limiting are in place.

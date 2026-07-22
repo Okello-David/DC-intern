@@ -2,8 +2,9 @@
 
 This is the backend API for the project, built with **Django** and **Django REST Framework (DRF)**.
 
-It uses **SQLite** for local development. It will move to
-**PostgreSQL / Amazon RDS** when the project is deployed to AWS in a later week.
+It uses **SQLite** for local development and **PostgreSQL on Amazon RDS** when
+deployed. Which one is used is decided entirely by the `DB_HOST` environment
+variable — see [Database configuration](#database-configuration).
 
 ## What this backend does
 
@@ -24,10 +25,14 @@ It uses **SQLite** for local development. It will move to
 ```
 backend/
 ├── venv/                  # Python virtual environment (not committed)
-├── config/                # Django project (settings, root urls)
+├── config/                # Django project
+│   ├── settings.py
+│   └── database.py        # SQLite-vs-PostgreSQL selection rule
 ├── career/                # Django app: models, serializers, views, urls, admin
-│   └── services/
-│       └── ai_service.py  # the only module that talks to an AI provider
+│   ├── services/
+│   │   └── ai_service.py  # the only module that talks to an AI provider
+│   └── management/commands/
+│       └── check_database.py
 ├── manage.py
 ├── requirements.txt
 ├── .env.example           # documented placeholders (committed)
@@ -92,6 +97,12 @@ it becomes mandatory on deployment.
 | `AI_PROVIDER` | AI implementation to use. `mock` = local fallback, no network call. | `mock` |
 | `AI_API_KEY` | Provider API key. **Server-side only** — never sent to the frontend. | *(empty)* |
 | `AI_MODEL` | Model identifier passed to the provider. | `mock-local` |
+| `DB_HOST` | **Database switch.** Empty → SQLite. Set → PostgreSQL on RDS. | *(empty)* |
+| `DB_NAME` | PostgreSQL database name. | *(unused locally)* |
+| `DB_USER` | PostgreSQL username. | *(unused locally)* |
+| `DB_PASSWORD` | PostgreSQL password. **Secret** — server environment only. | *(unused locally)* |
+| `DB_PORT` | PostgreSQL port. | `5432` |
+| `DB_SSLMODE` | libpq SSL mode for the RDS connection. | `require` |
 
 Two safety behaviours are built in:
 
@@ -138,6 +149,115 @@ Expected response:
 ```
 
 You can also open that URL directly in a browser.
+
+## Database configuration
+
+One environment variable decides everything: **`DB_HOST`**.
+
+| `DB_HOST` | Database used | Where |
+|---|---|---|
+| empty / unset | SQLite file `backend/db.sqlite3` | Local development |
+| set | PostgreSQL on Amazon RDS | EC2 inside the VPC |
+
+The rule lives in `config/database.py` (`build_database_config()`), which
+`settings.py` calls with values read from the environment. It is a plain
+function so the behaviour is unit-tested without needing a database.
+
+### Local development — SQLite
+
+Nothing to configure. Leave `DB_HOST` empty (or have no `.env` at all) and
+Django uses the SQLite file, exactly as in Week 3:
+
+```bash
+python manage.py migrate
+python manage.py runserver
+```
+
+### Production — PostgreSQL on Amazon RDS
+
+Set these in the **server environment** on EC2. Never in a committed file, never
+in source code:
+
+```bash
+DB_NAME=<database name>
+DB_USER=<database user>
+DB_PASSWORD=<database password>      # secret — AWS environment only
+DB_HOST=<rds-endpoint>.rds.amazonaws.com
+DB_PORT=5432
+DB_SSLMODE=require
+```
+
+When `DB_HOST` is set, Django uses `django.db.backends.postgresql` (driver:
+`psycopg[binary]`) with:
+
+- `CONN_MAX_AGE = 60` and `CONN_HEALTH_CHECKS = True` — connections are reused
+  for up to a minute to avoid a TCP + TLS handshake per request, but not so long
+  that idle workers hold RDS connection slots, and a reused connection is
+  verified before use (important after an RDS failover).
+- `OPTIONS = {'sslmode': 'require', 'connect_timeout': 10}` — traffic to RDS is
+  encrypted in transit, and an unreachable database fails in ~10s instead of
+  hanging. Note that `require` encrypts but does **not** verify the server
+  certificate; `verify-full` (plus the RDS CA bundle on the instance) is the
+  stronger setting to move to, and needs no code change.
+
+If `DB_HOST` is set but `DB_NAME`, `DB_USER`, or `DB_PASSWORD` is missing,
+Django **refuses to start** and names the missing variables. It never silently
+falls back to SQLite on a server — that would look like a successful deployment
+with an empty database.
+
+### `python manage.py check_database`
+
+A diagnostic command that reports which database Django is configured to use and
+then runs `SELECT 1`.
+
+```bash
+python manage.py check_database              # host masked
+python manage.py check_database --show-host  # host shown in full
+```
+
+Local output:
+
+```
+Database configuration
+  Alias:    default
+  Engine:   django.db.backends.sqlite3
+  Vendor:   sqlite
+  File:     /path/to/backend/db.sqlite3
+  Mode:     local development (DB_HOST is not set, so SQLite is used)
+
+Running SELECT 1 ...
+OK — the database is reachable and responding.
+```
+
+On EC2 with `DB_HOST` set, it reports the engine, database name, user, port,
+SSL mode, timeout, a masked host, and whether a password is set — then verifies
+the connection. It exits `1` with a readable message on failure.
+
+**It never prints the database password**, in any mode, and it scrubs the
+password out of driver error text before displaying it — so it is safe to run in
+a shared terminal or paste into a report.
+
+Run it *before* `migrate` when deploying: it separates "Django is not reading the
+environment variables" from "the security group is blocking me".
+
+### Running migrations on EC2 (Day 4)
+
+The RDS instance is private, so migrations are run **from the EC2 instance
+inside the VPC**, not from a laptop:
+
+```bash
+# On the EC2 instance, with the DB_* environment variables set:
+source venv/bin/activate
+python manage.py check_database     # expect: postgresql, SSL mode require, OK
+python manage.py migrate            # creates the schema on RDS
+python manage.py createsuperuser    # optional, for the admin site
+```
+
+Running `check_database` or `migrate` against the RDS endpoint **from a local
+laptop will fail, and that is correct** — the instance is not publicly
+accessible, it has a private IP, and its security group only accepts PostgreSQL
+from the EC2 application security group. See
+`../docs/WEEK4_AI_AND_DEPLOYMENT.md` for the network design.
 
 ## Data Models
 
@@ -270,9 +390,11 @@ curl -i -X POST http://127.0.0.1:8000/api/profiles/99999/generate-skill-gap/
 python manage.py test
 ```
 
-12 tests in `career/tests.py` cover the health endpoint, the Week 3 CRUD
+26 tests in `career/tests.py` cover the health endpoint, the Week 3 CRUD
 endpoints, the skill-gap endpoint (structure, saved record, own-data content),
-the 404 case, the empty-profile case, and the AI service's fallback behaviour.
+the 404 case, the empty-profile case, the AI service's fallback behaviour, the
+SQLite-vs-PostgreSQL selection rule, and the `check_database` command. No
+database server, RDS instance, or network access is required to run them.
 
 ### How to test the endpoints
 
@@ -310,11 +432,17 @@ registration, and CORS configured for the React frontend
 creating profiles, skills, and career inputs. See
 `../docs/WEEK3_MVP_BUILD.md` for the full week summary and test checklist.
 
-## Week 4 Day 2 Status
+## Week 4 Status
 
-Added environment-driven configuration (`python-decouple`, `.env.example`), an
-AI service layer, and the first AI feature: the Skill Gap Analysis endpoint,
-running in local mock mode with automated tests. Nothing is deployed to AWS yet.
+**Day 2** — Added environment-driven configuration (`python-decouple`,
+`.env.example`), an AI service layer, and the first AI feature: the Skill Gap
+Analysis endpoint, running in local mock mode with automated tests.
+
+**Day 3** — Added PostgreSQL support (`psycopg[binary]`, `config/database.py`,
+the `check_database` command) for the private Amazon RDS instance. SQLite
+remains the default for local work and all AI functionality is unchanged.
+Nothing is deployed to AWS yet, and no connection to RDS has been made.
+
 See `../docs/WEEK4_AI_AND_DEPLOYMENT.md`.
 
 ## Current Limitations
@@ -332,4 +460,10 @@ See `../docs/WEEK4_AI_AND_DEPLOYMENT.md`.
   is connected.
 - No input validation beyond DRF/Django defaults (e.g. no server-side
   resume parsing yet).
-- SQLite only; no production database, hosting, or AWS config yet.
+- PostgreSQL support is written and unit-tested, but **no migration has been run
+  against RDS** and nothing has connected to it yet — that is Day 4, from inside
+  the VPC.
+- `CONN_MAX_AGE` is per Gunicorn worker, so total RDS connections scale with
+  worker count. Check the instance's connection limit before scaling workers up
+  (RDS Proxy or PgBouncer is the fix, not more workers).
+- No hosting or deployed environment yet.

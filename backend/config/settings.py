@@ -15,6 +15,8 @@ from pathlib import Path
 from decouple import Csv, config
 from django.core.exceptions import ImproperlyConfigured
 
+from .database import build_database_config
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -88,15 +90,25 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 #
-# SQLite is still used for local Week 4 Day 2 work. Moving to PostgreSQL on
-# Amazon RDS is the next step (Week 4 Day 3+) and will read its credentials
-# from environment variables in the same way as the settings above.
+# One switch decides the backend: DB_HOST.
+#   DB_HOST empty (local laptop) -> SQLite, exactly as in Week 3.
+#   DB_HOST set (EC2 on AWS)     -> PostgreSQL on Amazon RDS.
+#
+# Nothing about RDS — endpoint, database name, username, password — is written
+# here. Those values live only in the server environment. The selection rule
+# itself lives in config/database.py so it can be unit-tested without a real
+# database connection.
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    'default': build_database_config(
+        base_dir=BASE_DIR,
+        db_host=config('DB_HOST', default=''),
+        db_name=config('DB_NAME', default=''),
+        db_user=config('DB_USER', default=''),
+        db_password=config('DB_PASSWORD', default=''),
+        db_port=config('DB_PORT', default='5432'),
+        db_sslmode=config('DB_SSLMODE', default='require'),
+    ),
 }
 
 
