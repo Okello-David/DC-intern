@@ -167,7 +167,8 @@ backend and frontend per the plan in `docs/WEEK2_SYSTEM_DESIGN.md`.
 
 Week 4 moves the project from "a working local MVP" to "an application that
 produces AI-assisted recommendations and is configured to be deployed." Days 1
-to 3 are complete; deploying to EC2 is next.
+to 4 are complete; deploying the frontend and completing the Week 4 report is
+next.
 
 ### Day 1 — AWS account prepared safely
 
@@ -241,15 +242,53 @@ configured for local use. No billable resources were created.
   none of them require a database server, an RDS instance, or network access.
   Nothing was deployed and no connection to RDS was attempted.
 
-Full write-up, network diagram, request-flow diagram, and testing checklist:
+### Day 4 — EC2 production configuration prepared
+
+- **Gunicorn and Nginx deployment files added.** A new `deploy/` directory holds
+  a systemd unit (`dc-intern-backend.service`), an Nginx site template, a
+  deploy script, and a placeholder environment-file template. Nginx listens
+  publicly on port 80 and serves collected static files; Gunicorn runs
+  `config.wsgi:application` with two workers bound to **127.0.0.1:8000 only**,
+  so the application cannot be reached from the internet except through the
+  proxy. systemd restarts it on failure and starts it at boot.
+- **Production Django settings completed.** `STATIC_ROOT` for `collectstatic`,
+  `CSRF_TRUSTED_ORIGINS` from the environment, and `SECURE_PROXY_SSL_HEADER` so
+  Django learns the original scheme from Nginx. All fifteen settings —
+  `DEBUG`, `SECRET_KEY`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`,
+  `CSRF_TRUSTED_ORIGINS`, the six `DB_*` values and the three `AI_*` values,
+  plus `USE_HTTPS` — come from the environment. Nothing is hard-coded.
+- **HTTPS settings deliberately deferred, and the reason matters.** Secure
+  cookies and `SECURE_SSL_REDIRECT` were previously tied to `DEBUG=False`. On a
+  deployment serving plain HTTP that does not harden the site, it breaks it —
+  browsers will not send a `Secure` cookie over HTTP, so logins fail. Those
+  settings now sit behind a `USE_HTTPS` flag that stays `False` until TLS is
+  terminated, at which point one environment variable turns them all on.
+- **Private RDS connection ready.** The instance reaches the database purely by
+  virtue of its security-group membership; `DB_SSLMODE=require` keeps the
+  EC2 → RDS hop encrypted. Migrations run from the instance, never from a laptop.
+- **Secrets stay off the instance's disk in the repository.** All configuration
+  lives in `/etc/dc-intern/backend.env` (`root:ec2-user`, `0640`), sourced from
+  AWS Systems Manager Parameter Store, outside `/opt/dc-intern` so `git` can
+  never see it. The deploy script verifies the required keys exist without
+  printing a single value, and never creates or fetches secrets itself.
+- **Administration via AWS Systems Manager Session Manager**, so the instance
+  needs no inbound SSH rule, no key pair, and no `.pem` file — access is
+  IAM-controlled and logged.
+- **Live backend deployment is pending execution.** No AWS resource was created
+  today. The deploy script's preflight and Django stages were exercised locally
+  against a scratch copy, and all 26 tests still pass on SQLite with the local
+  workflow unchanged.
+
+Full write-up, network diagram, request-flow diagram, verification checklist,
+and a table of common failure modes:
 [`docs/WEEK4_AI_AND_DEPLOYMENT.md`](docs/WEEK4_AI_AND_DEPLOYMENT.md)
 
-### Next Step — Day 4: Database migration to RDS and EC2 deployment
+### Next Step — Day 5: Deploy the frontend and complete Week 4 documentation
 
-Launch and harden the EC2 instance in the application subnet, set the
-environment variables on the server, and — **from inside the VPC, the only place
-the database is reachable from** — run `check_database` and then
-`python manage.py migrate` to create the schema on RDS. After that: Gunicorn and
-Nginx in front of Django, the React production build served, a least-privilege
-IAM role attached, and logs shipped to CloudWatch. Connecting a real, paid AI
-provider comes last, after a spending cap and rate limiting are in place.
+Run the deployment on EC2 and verify it end to end, then build the React app
+against the deployed API (its base URL is still hard-coded to `127.0.0.1:8000`
+and needs to become a build-time variable), serve it, and point
+`CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS` at its real origin. After
+that: TLS plus `USE_HTTPS=True`, logs to CloudWatch, and the Week 4 report.
+Connecting a real, paid AI provider comes last, after a spending cap and rate
+limiting are in place.

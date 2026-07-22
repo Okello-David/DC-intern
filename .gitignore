@@ -30,6 +30,7 @@ venv.bak/
 dist/
 build/
 out/
+staticfiles/
 .next/
 .nuxt/
 .output/

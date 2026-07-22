@@ -145,8 +145,14 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
+#
+# With DEBUG=False Django does not serve static files itself. On EC2,
+# `collectstatic` copies them into STATIC_ROOT and Nginx serves that directory
+# directly (see deploy/nginx/dc-intern.conf.template). This mainly affects the
+# Django admin and the DRF browsable API — the React app is built separately.
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
 # CORS
@@ -161,6 +167,15 @@ CORS_ALLOWED_ORIGINS = config(
     cast=Csv(),
 )
 
+# CSRF
+# Django checks the Origin header on unsafe requests against this list. It is
+# needed once the site is reached through a hostname other than 127.0.0.1 — for
+# example the EC2 public DNS name, or a domain later. Entries must include the
+# scheme, e.g. `http://ec2-1-2-3-4.compute.amazonaws.com`.
+# Empty locally: Django trusts same-origin requests from ALLOWED_HOSTS anyway.
+
+CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='', cast=Csv())
+
 
 # AI provider
 # The backend is the only component that talks to an AI provider, so the API
@@ -173,13 +188,48 @@ AI_API_KEY = config('AI_API_KEY', default='')
 AI_MODEL = config('AI_MODEL', default='mock-local')
 
 
+# Running behind a reverse proxy
+# On EC2, Nginx terminates the public connection and forwards to Gunicorn on
+# 127.0.0.1:8000, so Django only ever sees an HTTP request from localhost. This
+# tells Django to trust Nginx's X-Forwarded-Proto header when deciding whether
+# the *original* request was secure — which is what makes request.is_secure(),
+# and later the HTTPS settings below, work correctly.
+#
+# This is only safe because the header cannot be spoofed by a client: Gunicorn
+# binds to 127.0.0.1 (unreachable from outside the instance) and the Nginx
+# config always overwrites X-Forwarded-Proto rather than passing one through.
+# If Gunicorn is ever exposed directly, this line must be removed.
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+
 # Deployment hardening
-# These apply only when DEBUG is off, so local development is unaffected.
-# HTTPS redirect / HSTS are deliberately left out until TLS is terminated in
-# front of the app on AWS (Week 4 Day 3+).
+# Applied only when DEBUG is off, so local development is unaffected. These
+# four are safe over plain HTTP, which is what Day 4 deploys on.
 
 if not DEBUG:
     SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = 'DENY'
+    SECURE_REFERRER_POLICY = 'same-origin'
+    USE_X_FORWARDED_HOST = True
+
+
+# HTTPS-only hardening
+# Deliberately opt-in and OFF by default. Secure cookies are never sent over
+# plain HTTP, and SECURE_SSL_REDIRECT would bounce every request to a port that
+# is not listening yet — so switching these on before TLS exists does not harden
+# the Day 4 deployment, it breaks it (admin login and any cookie-authenticated
+# request would silently fail).
+#
+# Set USE_HTTPS=True in the server environment on the day TLS is terminated in
+# front of the application. No code change is needed.
+
+USE_HTTPS = config('USE_HTTPS', default=False, cast=bool)
+
+if USE_HTTPS:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    X_FRAME_OPTIONS = 'DENY'
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True

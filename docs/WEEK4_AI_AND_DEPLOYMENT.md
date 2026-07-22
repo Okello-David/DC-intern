@@ -14,7 +14,8 @@ Week 4 is split across days:
 | Day 1 | AWS account safety: MFA, budget alert, credit check, AWS CLI profile | Done |
 | Day 2 | First AI feature (Skill Gap Analysis) locally + production-ready Django settings | Done |
 | Day 3 | VPC, subnets, security groups, private Amazon RDS PostgreSQL + Django PostgreSQL support | Done |
-| Day 4+ | Deploy Django to EC2, run migrations from inside the VPC | Next |
+| Day 4 | Deploy Django to EC2: Gunicorn, Nginx, systemd, production settings | Done (repository prepared) |
+| Day 5+ | Deploy the frontend, complete Week 4 documentation | Next |
 
 ---
 
@@ -375,6 +376,195 @@ terminal or paste into a report.
 No AWS resources were created or contacted by the code changes, and no
 credentials were written to any file.
 
+## Day 4 — Deploy the Django Backend to Amazon EC2
+
+### Objective
+
+Make the repository deployable: production Django settings, a Gunicorn service,
+an Nginx site, and a repeatable deploy script — so that running one command on
+the instance produces a working backend. **The repository work is complete; no
+AWS resources were created and nothing has been deployed yet.**
+
+### Who does what
+
+```
+   Internet
+      │  HTTP :80
+      ▼
+ ┌─────────────────── EC2 (Amazon Linux 2023, public subnet) ───────────────┐
+ │                                                                          │
+ │   Nginx  ── public, port 80 ──────────────────────────────────┐          │
+ │     • terminates the client connection                        │          │
+ │     • serves /static/ from disk (Django will not, DEBUG=False)│          │
+ │     • sets X-Forwarded-For / -Proto / -Host                   │          │
+ │     • enforces client_max_body_size and proxy timeouts        │          │
+ │                                    │ proxy_pass               │          │
+ │                                    ▼                          │          │
+ │   Gunicorn ── 127.0.0.1:8000, loopback only ──────────────────┘          │
+ │     • runs config.wsgi:application, 2 worker processes                   │
+ │     • managed by systemd (dc-intern-backend.service)                     │
+ │     • logs to stdout/stderr -> journald                                  │
+ │     • reads all config from /etc/dc-intern/backend.env                   │
+ │                                    │                                     │
+ └────────────────────────────────────┼─────────────────────────────────────┘
+                                      │ PostgreSQL 5432, TLS
+                                      ▼
+                        Amazon RDS (private subnets, no public route)
+```
+
+| Component | Responsibility | Why it is not the other's job |
+|---|---|---|
+| **Nginx** | Public listener, static files, timeouts, request size limits, forwarded headers | Gunicorn is an application server, not a hardened edge server; it should never face the internet directly |
+| **Gunicorn** | Runs the Django WSGI application in worker processes | Nginx cannot execute Python; `runserver` is a development server and must never be used in production |
+| **systemd** | Starts Gunicorn at boot, restarts it on failure, captures logs | Keeps the service alive across reboots and crashes without anyone logging in |
+
+Gunicorn binds to **127.0.0.1:8000**, not `0.0.0.0`. That single choice means the
+application cannot be reached from outside the instance except through Nginx,
+regardless of what the security group allows.
+
+### Administration through Session Manager
+
+Instance access uses **AWS Systems Manager Session Manager**, not SSH.
+
+- The EC2 security group needs **no inbound SSH rule at all** — port 22 stays
+  closed, which removes the single most-attacked entry point on a public
+  instance.
+- There is no SSH key pair to distribute, lose, or leak, and no `.pem` file to
+  accidentally commit.
+- Access is controlled by **IAM**, so it can be granted and revoked per person,
+  and every session is logged in CloudTrail.
+- It works because the instance runs the SSM agent (pre-installed on Amazon
+  Linux 2023) and has an instance profile with
+  `AmazonSSMManagedInstanceCore` — an outbound connection, so no inbound port
+  is opened.
+
+```bash
+aws ssm start-session --target i-xxxxxxxxxxxx --profile <your-cli-profile>
+sudo su - ec2-user       # sessions start as ssm-user
+```
+
+### Connecting to the private RDS instance
+
+Nothing about Day 3's network design changes: RDS stays private, and the
+security group still admits PostgreSQL only from the EC2 application security
+group. What changes is that there is now something *inside* that group.
+
+The application connects because it is running on the EC2 instance — the
+credentials in `/etc/dc-intern/backend.env` are only half the story; the
+instance's **security group membership** is what actually grants access. This
+is why migrations are run from the instance and never from a laptop.
+
+`DB_SSLMODE=require` keeps the EC2 → RDS hop encrypted even though both sit
+inside the VPC.
+
+### Environment file security
+
+All configuration and every secret live in **`/etc/dc-intern/backend.env`**,
+outside the repository, on the instance only.
+
+| Property | Value | Reason |
+|---|---|---|
+| Path | `/etc/dc-intern/backend.env` | Outside `/opt/dc-intern`, so `git pull` and `git status` can never see or offer to commit it |
+| Owner | `root:ec2-user` | Only root can modify it |
+| Mode | `0640` | Only the service account can read it; other users on the box cannot |
+| Source of values | AWS Systems Manager Parameter Store | Secrets have one authoritative home; the file is a local materialisation |
+
+systemd reads the file as root (`EnvironmentFile=`) *before* dropping to
+`ec2-user`, so nothing in the application ever needs elevated privileges to
+obtain its own configuration.
+
+`deploy/backend.env.example` is the committed, placeholder-only template.
+`deploy/scripts/deploy_backend.sh` **never creates, fetches, edits, or prints**
+the real file — it only verifies that the required keys exist, using `grep -q`,
+which matches without echoing. The script also carries an explicit warning never
+to enable `set -x`, which would dump every secret into the terminal.
+
+### Production settings added today
+
+| Setting | Value | Purpose |
+|---|---|---|
+| `STATIC_ROOT` | `BASE_DIR / 'staticfiles'` | Target for `collectstatic`; Nginx serves this directory |
+| `CSRF_TRUSTED_ORIGINS` | from env, empty locally | Lets the admin and unsafe requests work through the EC2 hostname |
+| `SECURE_PROXY_SSL_HEADER` | `('HTTP_X_FORWARDED_PROTO', 'https')` | Django learns the original scheme from Nginx — ready for HTTPS |
+| `SECURE_REFERRER_POLICY`, `SECURE_CONTENT_TYPE_NOSNIFF`, `X_FRAME_OPTIONS` | on when `DEBUG=False` | Safe over plain HTTP |
+| `USE_HTTPS` | **`False`** | Gates the settings that need TLS |
+
+**Why `USE_HTTPS` exists.** Before today, `SESSION_COOKIE_SECURE` and
+`CSRF_COOKIE_SECURE` were switched on by `DEBUG=False`. On a Day 4 deployment
+that serves plain HTTP on port 80, that combination does not harden anything —
+it *breaks* the site, because a browser will not send a `Secure` cookie over
+HTTP, so admin login and every cookie-authenticated request fails with a
+confusing CSRF error. Those settings, plus `SECURE_SSL_REDIRECT` and HSTS, now
+live behind `USE_HTTPS`, which is set to `True` on the day a certificate exists.
+No code change is needed then — just one environment variable.
+
+Running `python manage.py check --deploy` today therefore reports warnings
+W004, W008, W012, and W016. **That is expected**, and it is exactly the list
+that `USE_HTTPS=True` clears.
+
+### AI keys are not exposed
+
+Audited today, and unchanged by the deployment work:
+
+- The skill-gap endpoint returns only `content`, `recommendation_type`,
+  identifiers, timestamps, and provider *names* — never a key.
+- The only log line that mentions the key mentions its *absence*
+  (`"AI_PROVIDER=%s but no AI_API_KEY is set"`) and interpolates the provider
+  name, not the key.
+- `check_database` prints `Password: set (not shown)` and scrubs the password
+  out of driver error text.
+- Django's `SafeExceptionReporterFilter` hides settings whose names match
+  `API`, `KEY`, `SECRET`, `PASS`, or `TOKEN`, so `AI_API_KEY`, `SECRET_KEY`, and
+  the database password are redacted in error reports even if `DEBUG` were ever
+  turned on by mistake.
+
+### Deployment files added
+
+```
+deploy/
+├── backend.env.example                 placeholders for /etc/dc-intern/backend.env
+├── nginx/
+│   └── dc-intern.conf.template         port 80, SERVER_NAME_PLACEHOLDER, static + proxy
+├── systemd/
+│   └── dc-intern-backend.service       Gunicorn, 2 workers, 127.0.0.1:8000
+└── scripts/
+    └── deploy_backend.sh               venv → checks → migrate → collectstatic → services
+```
+
+### Deployment verification checklist
+
+Run on the instance, in this order. Each step isolates one layer, so a failure
+tells you *where* the problem is.
+
+| # | Command | Expected |
+|---|---|---|
+| 1 | `sudo systemctl status dc-intern-backend` | `active (running)` |
+| 2 | `python manage.py check_database` | `postgresql`, `SSL mode: require`, `OK` |
+| 3 | `curl http://127.0.0.1:8000/api/health/` | `{"status": "ok", ...}` — Gunicorn works |
+| 4 | `curl http://127.0.0.1/api/health/` | Same JSON — Nginx proxying works |
+| 5 | `curl http://<public-dns>/api/health/` from a laptop | Same JSON — security group and `ALLOWED_HOSTS` are right |
+| 6 | `curl http://<public-dns>/api/profiles/` | `200` with a JSON list |
+| 7 | `curl -X POST http://<public-dns>/api/profiles/<id>/generate-skill-gap/` | `201`, `used_fallback: true` — the AI feature survived deployment |
+| 8 | Open `http://<public-dns>/admin/` | Login page **with CSS** — proves `collectstatic` + Nginx `/static/` |
+| 9 | `sudo journalctl -u dc-intern-backend -n 50` | Access log lines, no tracebacks, **no secrets** |
+| 10 | `sudo systemctl restart dc-intern-backend && curl http://127.0.0.1/api/health/` | Recovers automatically |
+| 11 | Reboot the instance, then repeat step 4 | Still works — `systemctl enable` did its job |
+
+### Common failure modes
+
+| Symptom | Most likely cause | Check |
+|---|---|---|
+| `502 Bad Gateway` from Nginx | Gunicorn is not running | `sudo systemctl status dc-intern-backend`, then `journalctl -u dc-intern-backend -n 50` |
+| Service fails instantly at boot | Bad or missing `/etc/dc-intern/backend.env`; `ImproperlyConfigured` for `SECRET_KEY` or a `DB_*` value | `journalctl -u dc-intern-backend -n 50` — the exception names the missing variable |
+| `DisallowedHost` / `400 Bad Request` | The hostname used is not in `ALLOWED_HOSTS` | Add the EC2 public DNS name to `ALLOWED_HOSTS`, restart the service |
+| `check_database` hangs then fails | RDS security group does not admit this instance's security group | Confirm the RDS inbound rule's source is the **EC2 security group**, not a CIDR |
+| `check_database` fails instantly with a DNS error | `DB_HOST` typo, or the command is being run outside the VPC | Re-run on the instance; compare against Parameter Store |
+| Admin page loads with no styling | `collectstatic` not run, or Nginx cannot read `staticfiles/` | Re-run the deploy script; `sudo -u nginx ls /opt/dc-intern/backend/staticfiles/` — `/opt/dc-intern` needs `o+rx` |
+| CSRF failure in the admin | Hostname missing from `CSRF_TRUSTED_ORIGINS` (needs the scheme) | Add `http://<public-dns>`, restart |
+| Everything works over HTTP, then breaks after enabling `USE_HTTPS` | TLS is not actually terminated yet | Set `USE_HTTPS=False` until a certificate is in place |
+| Browser calls from the frontend fail with a CORS error | Frontend origin missing from `CORS_ALLOWED_ORIGINS` | Add the exact origin **with scheme and port**, restart |
+| `504 Gateway Time-out` on the AI endpoint | `proxy_read_timeout` shorter than the AI call | Only relevant once a real provider is connected; raise it in the Nginx template |
+
 ## Current Limitations
 
 - **No real AI provider is connected yet.** `AI_PROVIDER=mock` returns a
@@ -403,34 +593,77 @@ credentials were written to any file.
   environment-driven, so this is a configuration change, not a code change.
 - **Database backups, snapshots, and rotation of the RDS password are not yet
   configured.**
+- **No TLS.** The site is served over plain HTTP on port 80, so traffic between
+  a browser and EC2 is unencrypted. `USE_HTTPS` is the switch that fixes this
+  once a certificate exists; until then, do not use the deployment for anything
+  involving real personal data.
+- **No deployment has actually been run.** Every file in `deploy/` has been
+  syntax-checked and the script's preflight and Django stages were exercised
+  locally against a scratch copy, but no EC2 instance has executed it.
+- **The deploy script assumes `git pull` has already happened** and has no
+  rollback step. If a deployment fails after `migrate`, recovery is manual.
+- **No process supervision beyond `Restart=on-failure`** and no health check
+  wired to anything that would notice an outage.
 - **The frontend still shows only session-scoped skills/career inputs**, so an
   analysis generated for a reloaded profile may be richer than what the summary
   panel displays.
 
 ---
 
-## Next Step — Day 4: Deploy Django to EC2 and Migrate Inside the VPC
+## Executing the Day 4 Deployment
 
-Everything below happens **from inside the VPC**, because that is the only place
-the database is reachable from.
+The repository is ready; these are the steps to run on the instance. Everything
+happens **from inside the VPC**, because that is the only place the database is
+reachable from.
 
-1. Launch the EC2 instance into a public application subnet with `app-sg`
-   attached, and harden it (SSH restricted to one IP, no password auth).
-2. Install Python, clone the repository, create the virtual environment, and
-   `pip install -r requirements.txt` — which now includes `psycopg[binary]`.
-3. Set the environment variables on the instance (not in a committed file):
-   `DEBUG=False`, a real `SECRET_KEY`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`,
-   and the six `DB_*` values including the RDS endpoint as `DB_HOST`.
-4. Run `python manage.py check_database` **first**. It should report
-   `postgresql`, `SSL mode: require`, and `OK`. If it fails here, the problem is
-   the security group or the variables — not the application.
-5. Run `python manage.py migrate` to create the schema on RDS, then
-   `createsuperuser`.
-6. Verify the API against PostgreSQL: `/api/health/`, the four CRUD endpoints,
-   and `POST /api/profiles/<id>/generate-skill-gap/` (still in mock mode).
-7. Put Gunicorn and Nginx in front of Django; build and serve the React
-   production build; point `CORS_ALLOWED_ORIGINS` and `ALLOWED_HOSTS` at the
-   deployed origins.
-8. Attach a least-privilege IAM role and ship application logs to CloudWatch.
-9. Only after all of the above, evaluate connecting a real AI provider — with a
+1. Launch the EC2 instance (Amazon Linux 2023) into a public application subnet
+   with the application security group and an instance profile granting
+   `AmazonSSMManagedInstanceCore`. **No inbound SSH rule.**
+2. Connect with Session Manager, install prerequisites, and clone the repo:
+   ```bash
+   sudo dnf install -y git python3.12 python3.12-pip nginx
+   sudo install -d -o ec2-user -g ec2-user /opt/dc-intern
+   git clone <repo-url> /opt/dc-intern
+   ```
+3. Create the environment file from the committed template and fill in the real
+   values from Parameter Store:
+   ```bash
+   sudo install -d -m 750 -o root -g ec2-user /etc/dc-intern
+   sudo cp /opt/dc-intern/deploy/backend.env.example /etc/dc-intern/backend.env
+   sudo chown root:ec2-user /etc/dc-intern/backend.env && sudo chmod 640 /etc/dc-intern/backend.env
+   sudo nano /etc/dc-intern/backend.env
+   ```
+4. Make sure Nginx can traverse to the static directory:
+   `sudo chmod o+rx /opt/dc-intern /opt/dc-intern/backend`
+5. Deploy:
+   ```bash
+   SERVER_NAME=<ec2-public-dns> /opt/dc-intern/deploy/scripts/deploy_backend.sh
+   ```
+   The script creates the virtualenv, installs requirements, runs `check`,
+   `check --deploy`, `check_database`, `migrate`, and `collectstatic`, installs
+   and starts the systemd unit, renders and validates the Nginx site, restarts
+   Nginx, and smoke-tests both layers.
+6. Create an admin user: `python manage.py createsuperuser` (with the
+   environment file sourced).
+7. Work through the verification checklist above.
+
+## Next Step — Day 5: Deploy the Frontend and Complete Week 4 Documentation
+
+1. Build the React app (`npm run build`) with the API base URL pointing at the
+   deployed backend instead of `127.0.0.1:8000` — it is currently hard-coded in
+   `frontend/src/services/api.js` and needs to become a build-time variable.
+2. Serve the built frontend: either from Nginx on the same instance, or from S3
+   (with CloudFront later). Decide and document the trade-off.
+3. Set `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS` to the frontend's real
+   origin and restart the backend service.
+4. Verify the full user journey against the deployed stack: create a profile,
+   add skills, add a career input, generate a skill-gap analysis.
+5. Add TLS (certificate + port 443 server block + redirect), then set
+   `USE_HTTPS=True` and re-run `manage.py check --deploy` — the four expected
+   warnings should disappear.
+6. Ship application logs to CloudWatch and confirm the billing alert still
+   reflects the running resources.
+7. Complete the Week 4 report: architecture as-built, screenshots, costs, and
+   the security decisions taken.
+8. Only after all of the above, evaluate connecting a real AI provider — with a
    spending cap and endpoint rate limiting in place first.

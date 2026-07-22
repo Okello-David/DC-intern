@@ -1,0 +1,68 @@
+# systemd unit for the Django backend (Gunicorn).
+#
+# Install on the EC2 instance with:
+#   sudo install -m 644 /opt/dc-intern/deploy/systemd/dc-intern-backend.service \
+#        /etc/systemd/system/dc-intern-backend.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now dc-intern-backend
+#
+# deploy/scripts/deploy_backend.sh does this for you.
+
+[Unit]
+Description=DC-Intern Django backend (Gunicorn)
+Documentation=https://docs.gunicorn.org/en/stable/deploy.html
+# network-online (not just network) so the instance can resolve and reach the
+# private RDS endpoint before Django starts and opens a connection.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Gunicorn signals readiness to systemd itself, so `systemctl start` only
+# returns once workers are actually accepting connections. If a Gunicorn
+# version without systemd support is ever used, change this to Type=simple.
+Type=notify
+
+User=ec2-user
+Group=ec2-user
+
+WorkingDirectory=/opt/dc-intern/backend
+
+# All configuration and every secret comes from this file: DEBUG, SECRET_KEY,
+# ALLOWED_HOSTS, CORS_ALLOWED_ORIGINS, CSRF_TRUSTED_ORIGINS, the DB_* values and
+# the AI_* values. systemd reads it as root before dropping to ec2-user, so it
+# can stay tightly permissioned (root:ec2-user 0640). It is NEVER in the repo.
+EnvironmentFile=/etc/dc-intern/backend.env
+
+ExecStart=/opt/dc-intern/backend/venv/bin/gunicorn \
+    --workers 2 \
+    --bind 127.0.0.1:8000 \
+    --timeout 60 \
+    --graceful-timeout 30 \
+    --access-logfile - \
+    --error-logfile - \
+    config.wsgi:application
+
+# Graceful reload without dropping requests: sudo systemctl reload dc-intern-backend
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=30
+
+Restart=on-failure
+RestartSec=5s
+
+# Logs go to stdout/stderr, which systemd captures into the journal:
+#   sudo journalctl -u dc-intern-backend -f
+# This is also the hand-off point for shipping logs to CloudWatch later.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dc-intern-backend
+
+# Modest hardening. The service only needs to read its own code and write
+# nothing outside the app directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

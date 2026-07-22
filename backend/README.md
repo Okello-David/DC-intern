@@ -103,6 +103,8 @@ it becomes mandatory on deployment.
 | `DB_PASSWORD` | PostgreSQL password. **Secret** — server environment only. | *(unused locally)* |
 | `DB_PORT` | PostgreSQL port. | `5432` |
 | `DB_SSLMODE` | libpq SSL mode for the RDS connection. | `require` |
+| `CSRF_TRUSTED_ORIGINS` | Origins allowed to send unsafe requests, **with scheme**. Needed once the site is reached by hostname. | *(empty)* |
+| `USE_HTTPS` | Turns on secure cookies, HTTPS redirect, and HSTS. Leave `False` until TLS exists. | `False` |
 
 Two safety behaviours are built in:
 
@@ -258,6 +260,111 @@ laptop will fail, and that is correct** — the instance is not publicly
 accessible, it has a private IP, and its security group only accepts PostgreSQL
 from the EC2 application security group. See
 `../docs/WEEK4_AI_AND_DEPLOYMENT.md` for the network design.
+
+## Production deployment (EC2)
+
+The dev server (`manage.py runserver`) is never used in production. On EC2,
+**Gunicorn** runs the WSGI application and **Nginx** sits in front of it.
+
+### Directory layout on the instance
+
+```
+/opt/dc-intern/                     git clone of this repository (owned by ec2-user)
+├── backend/
+│   ├── venv/                       virtualenv created by the deploy script
+│   ├── staticfiles/                collectstatic output, served by Nginx
+│   └── manage.py
+└── deploy/                         service, site, and script templates
+
+/etc/dc-intern/backend.env          all config and secrets (root:ec2-user, 0640)
+/etc/systemd/system/dc-intern-backend.service
+/etc/nginx/conf.d/dc-intern.conf
+```
+
+`/etc/dc-intern/backend.env` lives **outside** the repository so `git pull` and
+`git status` can never see it. It is populated from AWS Systems Manager
+Parameter Store; `deploy/backend.env.example` is the placeholder-only template.
+
+### Gunicorn
+
+```bash
+# What the systemd unit runs (do not run this by hand except to debug):
+/opt/dc-intern/backend/venv/bin/gunicorn \
+    --workers 2 \
+    --bind 127.0.0.1:8000 \
+    --timeout 60 \
+    --access-logfile - \
+    --error-logfile - \
+    config.wsgi:application
+```
+
+Binding to `127.0.0.1` — not `0.0.0.0` — means the application is unreachable
+from outside the instance except through Nginx.
+
+### One-command deployment
+
+```bash
+# On the instance, as ec2-user, in a Session Manager shell:
+cd /opt/dc-intern && git pull
+SERVER_NAME=<ec2-public-dns> ./deploy/scripts/deploy_backend.sh
+```
+
+The script creates/updates the virtualenv, installs requirements, runs `check`,
+`check --deploy`, `check_database`, `migrate`, and `collectstatic`, installs and
+restarts the systemd unit, renders and validates the Nginx site, restarts Nginx,
+and smoke-tests both Gunicorn and Nginx. It never creates, fetches, or prints
+any secret.
+
+### Migrations and static files by hand
+
+Run these from `/opt/dc-intern/backend` with the environment file loaded:
+
+```bash
+set -a; source /etc/dc-intern/backend.env; set +a
+
+venv/bin/python manage.py check_database     # verify RDS first
+venv/bin/python manage.py migrate            # create/update the schema on RDS
+venv/bin/python manage.py collectstatic --noinput
+venv/bin/python manage.py createsuperuser
+```
+
+`collectstatic` copies the Django admin and DRF browsable-API assets into
+`staticfiles/`, which Nginx serves — with `DEBUG=False`, Django will not serve
+them itself, so skipping this step gives you an unstyled admin page.
+
+### systemd commands
+
+```bash
+sudo systemctl status  dc-intern-backend      # is it running?
+sudo systemctl restart dc-intern-backend      # after changing backend.env or code
+sudo systemctl reload  dc-intern-backend      # graceful worker reload, no dropped requests
+sudo systemctl enable  dc-intern-backend      # start on boot
+sudo journalctl -u dc-intern-backend -f       # follow logs
+sudo journalctl -u dc-intern-backend -n 50    # last 50 lines (start here on failure)
+```
+
+Changing `/etc/dc-intern/backend.env` requires a **restart**, not a reload —
+systemd only reads the environment file when the service starts.
+
+### Nginx commands
+
+```bash
+sudo nginx -t                                 # validate config before applying it
+sudo systemctl reload nginx                   # apply config with no downtime
+sudo systemctl restart nginx
+sudo tail -f /var/log/nginx/dc-intern.error.log
+```
+
+Always run `nginx -t` before reloading; an invalid config will otherwise take
+the site down.
+
+### HTTPS
+
+The site currently serves plain HTTP on port 80. Secure cookies,
+`SECURE_SSL_REDIRECT`, and HSTS are gated behind `USE_HTTPS`, which stays
+`False` until a certificate is in place — enabling them without TLS breaks
+logins rather than hardening them. When TLS is configured, set `USE_HTTPS=True`
+and restart; no code change is needed.
 
 ## Data Models
 
@@ -443,6 +550,12 @@ the `check_database` command) for the private Amazon RDS instance. SQLite
 remains the default for local work and all AI functionality is unchanged.
 Nothing is deployed to AWS yet, and no connection to RDS has been made.
 
+**Day 4** — Added Gunicorn, production settings (`STATIC_ROOT`,
+`CSRF_TRUSTED_ORIGINS`, `SECURE_PROXY_SSL_HEADER`, a `USE_HTTPS` gate), and the
+`deploy/` directory: a systemd unit, an Nginx site template, a deploy script,
+and a placeholder environment-file template. The repository is deployment-ready;
+no AWS resource has been created and nothing has been deployed.
+
 See `../docs/WEEK4_AI_AND_DEPLOYMENT.md`.
 
 ## Current Limitations
@@ -466,4 +579,10 @@ See `../docs/WEEK4_AI_AND_DEPLOYMENT.md`.
 - `CONN_MAX_AGE` is per Gunicorn worker, so total RDS connections scale with
   worker count. Check the instance's connection limit before scaling workers up
   (RDS Proxy or PgBouncer is the fix, not more workers).
-- No hosting or deployed environment yet.
+- Deployment files exist and are syntax-checked, but **nothing has been deployed
+  yet** — no EC2 instance has run the script.
+- **No TLS.** The planned deployment serves plain HTTP on port 80;
+  `manage.py check --deploy` reports W004/W008/W012/W016 for exactly this
+  reason, and `USE_HTTPS=True` clears them once a certificate exists.
+- No rollback step in the deploy script; recovery from a failed deployment is
+  manual.
