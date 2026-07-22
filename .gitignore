@@ -38,6 +38,7 @@ out/
 # IDE and editor folders
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
