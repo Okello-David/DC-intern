@@ -17,6 +17,10 @@ venv.bak/
 .eggs/
 
 # Environment variables and secrets
+# `*.env` also covers production filenames such as `backend.env` — the file
+# deployed to /etc/dc-intern/backend.env. Committed templates end in
+# `.example`, so they are not matched.
+*.env
 .env
 .env.local
 .env.development.local

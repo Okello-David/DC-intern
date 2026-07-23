@@ -30,7 +30,8 @@ backend/
 │   └── database.py        # SQLite-vs-PostgreSQL selection rule
 ├── career/                # Django app: models, serializers, views, urls, admin
 │   ├── services/
-│   │   └── ai_service.py  # the only module that talks to an AI provider
+│   │   ├── ai_service.py  # the only module that talks to an AI provider
+│   │   └── prompts.py     # system instruction + prompt builder (review here)
 │   └── management/commands/
 │       └── check_database.py
 ├── manage.py
@@ -94,9 +95,13 @@ it becomes mandatory on deployment.
 | `SECRET_KEY` | Django signing key. | dev-only placeholder (allowed only while `DEBUG=True`) |
 | `ALLOWED_HOSTS` | Comma-separated hostnames Django will serve. | `127.0.0.1,localhost` |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated frontend origins allowed to call the API. | `http://localhost:5173,http://127.0.0.1:5173` |
-| `AI_PROVIDER` | AI implementation to use. `mock` = local fallback, no network call. | `mock` |
-| `AI_API_KEY` | Provider API key. **Server-side only** — never sent to the frontend. | *(empty)* |
-| `AI_MODEL` | Model identifier passed to the provider. | `mock-local` |
+| `AI_PROVIDER` | AI implementation to use: `mock` (no network call) or `bedrock` (Amazon Bedrock). | `mock` |
+| `AI_MODEL` | Model id passed to the provider. Production plan: `amazon.nova-micro-v1:0`. | `mock-local` |
+| `AWS_BEDROCK_REGION` | Region whose Bedrock endpoint is called; model access must be enabled there. | `eu-north-1` |
+| `AI_MAX_TOKENS` | Response cap — a formatting limit and a per-request cost limit. | `1200` |
+| `AI_TEMPERATURE` | Sampling temperature. Low, for factual and repeatable output. | `0.2` |
+| `AI_FALLBACK_TO_MOCK` | On provider failure: `True` → labelled local analysis, `False` → clean `503`. | `True` |
+| `AI_API_KEY` | Unused by `mock` and `bedrock`; reserved for a future key-based provider. | *(empty)* |
 | `DB_HOST` | **Database switch.** Empty → SQLite. Set → PostgreSQL on RDS. | *(empty)* |
 | `DB_NAME` | PostgreSQL database name. | *(unused locally)* |
 | `DB_USER` | PostgreSQL username. | *(unused locally)* |
@@ -426,8 +431,11 @@ Response (`201 Created`):
   "profile_id": 1,
   "recommendation_id": 3,
   "recommendation_type": "Skill Gap Analysis",
-  "content": "SKILL GAP ANALYSIS\nStudent: ...",
-  "created_at": "2026-07-22T10:31:57.802323Z",
+  "content": "1. CAREER READINESS SUMMARY\n...",
+  "created_at": "2026-07-23T10:31:57.802323Z",
+  "provider": "mock",
+  "model": "mock-local",
+  "fallback_used": true,
   "ai_provider": "mock",
   "ai_model": "mock-local",
   "used_fallback": true,
@@ -435,9 +443,18 @@ Response (`201 Created`):
 }
 ```
 
-The analysis content has seven sections: career readiness summary, strengths,
-missing technical skills, missing professional skills, suggested projects, a
-4-week learning plan, and limitations.
+`provider`, `model`, and `fallback_used` report **what actually produced the
+text**, not what was configured — a Bedrock failure that falls back reads
+`mock` / `fallback_used: true`. They are names and booleans only: no credential,
+no region, no account id, no request id. (`ai_provider` / `ai_model` /
+`used_fallback` are the same three values under their pre-Day-5 names, kept so
+nothing already reading this endpoint breaks.)
+
+The analysis content has eight sections: career readiness summary, current
+strengths, missing technical skills, missing professional skills, recommended
+projects, a four-week learning plan, internship preparation actions, and
+limitations. Both providers produce the same eight, so a fallback response is
+structurally identical to a model response.
 
 ### Error handling
 
@@ -448,21 +465,51 @@ missing technical skills, missing professional skills, suggested projects, a
 | Configured AI provider fails or is unavailable | `503` with a readable `error` message — never a traceback |
 | Any other unexpected error | `500` with a generic `error` message; the full traceback is logged server-side only |
 
-### Mock mode and the API key rule
+### AI providers: mock and Amazon Bedrock
 
-`AI_PROVIDER=mock` (the default) makes **no external network call**. The service
+```
+AI_PROVIDER=mock      build_local_analysis()      no network call, zero cost
+AI_PROVIDER=bedrock   bedrock-runtime.converse()  EC2 IAM role, no API key
+```
+
+**Mock is the default**, and it makes **no external network call**: the service
 layer builds the analysis locally from the student's own data, so the feature
-works offline, costs nothing, and sends no student data to a third party.
-`used_fallback: true` in the response says so honestly.
+works offline, costs nothing, and sends no student data anywhere. Every automated
+test runs in mock mode or against a mocked client — a fresh checkout cannot call
+AWS by accident.
 
-The same fallback is used if `AI_PROVIDER` names a real provider but `AI_API_KEY`
-is empty — a misconfiguration degrades to a working demo instead of an error.
+**Bedrock** uses the Converse API through boto3. There is **no AWS access key
+anywhere in this project**: boto3 obtains temporary credentials from the EC2
+instance's IAM role (`dc-intern-ec2-role`), and they cannot be used off the
+instance. Locally it uses whatever AWS CLI profile the developer has configured.
+Using the Converse API rather than `invoke_model` means changing model is an
+`AI_MODEL` change with no code change.
 
-**The AI API key is read from the server environment and used only inside
-`ai_service.py`. It is never returned by the API and never reaches the browser.**
-A key in frontend code is public the moment the page loads: it can be read from
-the network tab or the built JavaScript, and any resulting API charges land on
-this project's account.
+> **Status:** the Bedrock path is implemented and tested against a mocked boto3
+> client. **No real Bedrock request has been made from this project** — model
+> access has not been enabled in the account and the instance role has no
+> `bedrock:InvokeModel` permission yet.
+
+**When Bedrock fails**, `AI_FALLBACK_TO_MOCK` decides:
+
+- `True` (default) — the local analysis is returned, and four separate things say
+  so: `provider: "mock"`, `fallback_used: true`, a `notes` entry with the reason,
+  and a `NOTE — FALLBACK MODE` banner in the saved content. **The response never
+  claims a model produced text that the rule engine produced.**
+- `False` — a clean `503` with a readable message, and nothing is saved.
+
+AWS error detail never leaves the server: `ClientError` codes map to
+written-for-users messages, and only the error *code* is logged. Prompts and
+responses are never logged.
+
+The prompt itself lives in `career/services/prompts.py`, deliberately separate
+from the AWS code so it can be reviewed on its own. It excludes the student's
+name and truncates career input. See
+[`../docs/AI_PROMPT_DOCUMENTATION.md`](../docs/AI_PROMPT_DOCUMENTATION.md).
+
+**Nothing AI-related ever reaches the browser except the text and the provider
+name.** Anything in a React bundle is public the moment the page loads, which is
+why the provider call happens here and not there.
 
 ### How to test it locally
 
@@ -497,11 +544,18 @@ curl -i -X POST http://127.0.0.1:8000/api/profiles/99999/generate-skill-gap/
 python manage.py test
 ```
 
-26 tests in `career/tests.py` cover the health endpoint, the Week 3 CRUD
-endpoints, the skill-gap endpoint (structure, saved record, own-data content),
-the 404 case, the empty-profile case, the AI service's fallback behaviour, the
-SQLite-vs-PostgreSQL selection rule, and the `check_database` command. No
-database server, RDS instance, or network access is required to run them.
+57 tests in `career/tests.py` cover the health endpoint, the Week 3 CRUD
+endpoints, the skill-gap endpoint (structure, saved record, own-data content,
+provider metadata), the 404 case, the empty-profile case, the prompt builder
+(required fields present, student name absent, truncation), the Bedrock provider
+(request shape, text extraction, every error path, both fallback modes), the
+SQLite-vs-PostgreSQL selection rule, and the `check_database` command.
+
+No database server, RDS instance, AWS credential, or network access is required
+to run them. `_bedrock_client()` is the single place a boto3 client is
+constructed, and the Bedrock tests patch it; one test additionally replaces
+`boto3.client` itself with a function that **fails the test if it is called at
+all**, so a real AWS request cannot slip into the suite unnoticed.
 
 ### How to test the endpoints
 
@@ -553,19 +607,35 @@ Nothing is deployed to AWS yet, and no connection to RDS has been made.
 **Day 4** — Added Gunicorn, production settings (`STATIC_ROOT`,
 `CSRF_TRUSTED_ORIGINS`, `SECURE_PROXY_SSL_HEADER`, a `USE_HTTPS` gate), and the
 `deploy/` directory: a systemd unit, an Nginx site template, a deploy script,
-and a placeholder environment-file template. The repository is deployment-ready;
-no AWS resource has been created and nothing has been deployed.
+and a placeholder environment-file template. **Deployed and verified on EC2:**
+Nginx on port 80, Gunicorn on `127.0.0.1:8000`, migrations applied to the
+private RDS instance, health endpoint returning `200`.
 
-See `../docs/WEEK4_AI_AND_DEPLOYMENT.md`.
+**Day 5** — Added the **Amazon Bedrock** provider (Converse API, EC2 IAM role,
+no API key), a reusable prompt builder in `career/services/prompts.py`, five new
+`AI_*`/`AWS_*` settings, `boto3` in `requirements.txt`, and `provider` /
+`model` / `fallback_used` metadata on the skill-gap response. The Nginx template
+now serves the React build and the API from one origin. Tests: 26 → 57.
+`AI_PROVIDER` stays `mock`; **no Bedrock request has been made**.
+
+See `../docs/WEEK4_AI_AND_DEPLOYMENT.md`,
+`../docs/AI_PROMPT_DOCUMENTATION.md`, and `../docs/WEEK4_DEPLOYMENT_NOTES.md`.
 
 ## Current Limitations
 
 - No authentication — any client can read/write any record, and any client can
   generate an analysis for any profile. Fine for local MVP work, not for
   deployment.
-- No real AI provider connected — `AI_PROVIDER=mock` returns a rule-based local
-  analysis. `_call_provider()` in `ai_service.py` is a documented stub, so
-  adding a provider is a single-function change.
+- **Amazon Bedrock is implemented but has never been called.** `AI_PROVIDER`
+  stays `mock`, model access has not been enabled in the account, and
+  `dc-intern-ec2-role` has no `bedrock:InvokeModel` permission. The code path is
+  covered by tests against a mocked client only; real model output quality is
+  unassessed.
+- **No validation of model output.** A Bedrock response is saved and returned as
+  received — nothing checks that all eight sections are present or that the
+  prompt's prohibitions were respected.
+- **Career input is untrusted text placed in a prompt.** Truncation bounds it;
+  nothing else sanitises it, so prompt injection is possible.
 - Only one recommendation type has a producer. `Career Path`,
   `Project Recommendation`, `Learning Plan`, and `Resume Feedback` remain
   unimplemented.
@@ -573,14 +643,14 @@ See `../docs/WEEK4_AI_AND_DEPLOYMENT.md`.
   is connected.
 - No input validation beyond DRF/Django defaults (e.g. no server-side
   resume parsing yet).
-- PostgreSQL support is written and unit-tested, but **no migration has been run
-  against RDS** and nothing has connected to it yet — that is Day 4, from inside
-  the VPC.
+- No per-user cost metering for AI calls. Token counts are logged, but nothing
+  aggregates them per profile or enforces a ceiling below the account budget
+  alert.
 - `CONN_MAX_AGE` is per Gunicorn worker, so total RDS connections scale with
   worker count. Check the instance's connection limit before scaling workers up
   (RDS Proxy or PgBouncer is the fix, not more workers).
-- Deployment files exist and are syntax-checked, but **nothing has been deployed
-  yet** — no EC2 instance has run the script.
+- The **frontend** deployment script (`deploy/scripts/deploy_frontend.sh`) has
+  not yet been run on the instance; the backend script has.
 - **No TLS.** The planned deployment serves plain HTTP on port 80;
   `manage.py check --deploy` reports W004/W008/W012/W016 for exactly this
   reason, and `USE_HTTPS=True` clears them once a certificate exists.

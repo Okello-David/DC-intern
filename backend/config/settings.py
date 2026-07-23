@@ -178,14 +178,45 @@ CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='', cast=Csv())
 
 
 # AI provider
-# The backend is the only component that talks to an AI provider, so the API
-# key stays server-side and never reaches the browser. `mock` means "no
-# external call" — the service layer returns a structured local analysis so the
-# feature is demonstrable offline and at zero cost.
+# The backend is the only component that talks to an AI provider, so no
+# credential ever reaches the browser.
+#
+#   AI_PROVIDER=mock      no external call at all — the service layer returns a
+#                         structured local analysis, so the feature is
+#                         demonstrable offline and at zero cost. The default,
+#                         which means a fresh checkout and the test suite can
+#                         never contact AWS by accident.
+#   AI_PROVIDER=bedrock   Amazon Bedrock Runtime (Converse API) using the EC2
+#                         instance's IAM role. Note what is NOT here: no AWS
+#                         access key, no secret key. boto3 obtains temporary
+#                         credentials from the instance role itself.
 
 AI_PROVIDER = config('AI_PROVIDER', default='mock')
-AI_API_KEY = config('AI_API_KEY', default='')
 AI_MODEL = config('AI_MODEL', default='mock-local')
+
+# Region the Bedrock Runtime endpoint is called in. Must be a region where the
+# account has model access enabled for AI_MODEL; it does not have to match the
+# region the EC2 instance runs in.
+AWS_BEDROCK_REGION = config('AWS_BEDROCK_REGION', default='eu-north-1')
+
+# Response length cap. Bedrock bills per token, so this is a cost control as
+# much as a formatting one: eight sections fit comfortably in ~1200 tokens.
+AI_MAX_TOKENS = config('AI_MAX_TOKENS', default=1200, cast=int)
+
+# Low temperature: this is factual guidance about a real person's skills, so
+# predictable, conservative output is wanted over creative variation.
+AI_TEMPERATURE = config('AI_TEMPERATURE', default=0.2, cast=float)
+
+# What to do when a real provider fails.
+#   True  -> return the local analysis, clearly labelled as a fallback. The
+#            student still gets something useful and is told what produced it.
+#   False -> return a clean 503. Correct when the point is to prove the model
+#            path works, because a silent fallback would hide an outage.
+AI_FALLBACK_TO_MOCK = config('AI_FALLBACK_TO_MOCK', default=True, cast=bool)
+
+# Retained for a future key-based provider (OpenAI/Gemini/Anthropic direct).
+# Bedrock does not use it and it must stay empty in every AWS environment.
+AI_API_KEY = config('AI_API_KEY', default='')
 
 
 # Running behind a reverse proxy

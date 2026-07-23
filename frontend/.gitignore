@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# Real Vite environment files. Only `.env.example` (placeholders) is committed.
+# Note that every VITE_* value is compiled into the public bundle, so these
+# files must never hold a secret in the first place — they are ignored because
+# they are machine-specific, not because they are safe places for keys.
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
