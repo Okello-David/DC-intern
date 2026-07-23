@@ -240,6 +240,55 @@ body {
   border-top: 1px solid var(--color-border);
 }
 
+/* Loading state for the AI request: a visible, moving indicator, because a
+   model call can take several seconds and a static label reads as a hang. */
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.spinner {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Respect a reduced-motion preference rather than spinning regardless. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 3s;
+  }
+}
+
+/* "Try again" inside an error message — a button for behaviour, styled as a
+   link so it does not compete with the primary action. */
+.link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* The standing AI disclaimer under every generated analysis. */
+.disclaimer {
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
 .workflow-status {
   list-style: none;
   margin: 0.5rem 0;

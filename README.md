@@ -163,12 +163,36 @@ plans) from a student's profile, skills, and career inputs, and begin AWS
 deployment — moving from SQLite to PostgreSQL/Amazon RDS and deploying the
 backend and frontend per the plan in `docs/WEEK2_SYSTEM_DESIGN.md`.
 
-## Week 4 Status: AI Feature and Deployment Preparation
+## Week 4 Status: AI Integration and AWS Deployment — **Complete**
 
-Week 4 moves the project from "a working local MVP" to "an application that
-produces AI-assisted recommendations and is configured to be deployed." Days 1
-to 4 are complete; deploying the frontend and completing the Week 4 report is
-next.
+Week 4 moved the project from "a working local MVP" to "an application deployed
+on AWS that produces AI-assisted recommendations."
+
+| Deliverable | Status |
+|---|---|
+| AWS account safety — MFA, budget alert, credit check, CLI profile | ✅ Complete |
+| Skill Gap Analysis feature implemented | ✅ Complete |
+| Private Amazon RDS PostgreSQL deployed | ✅ Complete |
+| Django backend deployed to EC2 | ✅ Complete and verified |
+| Nginx and Gunicorn configured | ✅ Complete and verified |
+| React frontend production build and deployment | ✅ Build and deployment files complete — not yet published on the instance |
+| Amazon Bedrock integration added | ✅ Implemented and tested against a mocked client — **not yet enabled or called** |
+| Live application link | 📍 `http://<ec2-public-address>/` — placeholder until an Elastic IP is allocated; the address changes on stop/start |
+| Week 4 documentation and report | ✅ Complete |
+
+**Two things are deliberately not claimed.** No Amazon Bedrock request has ever
+been made from this project — model access is not enabled in the account and the
+instance role has no `bedrock:InvokeModel` permission. And the frontend
+deployment script has not yet been executed on the EC2 instance, though the
+build it runs has been verified locally. Everything else in this section is
+deployed and verified.
+
+Week 4 documentation:
+[`WEEK4_WEEKLY_REPORT.md`](docs/WEEK4_WEEKLY_REPORT.md) (supervisor report) ·
+[`WEEK4_DEPLOYMENT_NOTES.md`](docs/WEEK4_DEPLOYMENT_NOTES.md) (architecture, deployment, checklists) ·
+[`AI_PROMPT_DOCUMENTATION.md`](docs/AI_PROMPT_DOCUMENTATION.md) (prompt, safety, privacy) ·
+[`WEEK4_AI_AND_DEPLOYMENT.md`](docs/WEEK4_AI_AND_DEPLOYMENT.md) (design write-up) ·
+[`WEEK4_DAY4_DEPLOYMENT_REPORT.md`](docs/WEEK4_DAY4_DEPLOYMENT_REPORT.md) (AWS verification evidence)
 
 ### Day 1 — AWS account prepared safely
 
@@ -274,21 +298,77 @@ configured for local use. No billable resources were created.
 - **Administration via AWS Systems Manager Session Manager**, so the instance
   needs no inbound SSH rule, no key pair, and no `.pem` file — access is
   IAM-controlled and logged.
-- **Live backend deployment is pending execution.** No AWS resource was created
-  today. The deploy script's preflight and Django stages were exercised locally
-  against a scratch copy, and all 26 tests still pass on SQLite with the local
-  workflow unchanged.
+- **The backend is deployed to EC2 and verified.** Amazon Linux 2023 in
+  `eu-north-1`, Nginx serving publicly on port 80 and proxying to Gunicorn on
+  `127.0.0.1:8000`, Django connected to the **private RDS PostgreSQL** instance
+  with migrations applied, and the **public health endpoint returning `200`**.
+  All four CRUD endpoints and the collected static files serve correctly.
+- **Verified read-only against the live account:** the EC2 security group has
+  exactly one inbound rule (TCP 80 — no SSH, no 8000, no 5432); RDS is
+  `available`, not publicly accessible, encrypted at rest, and reachable only
+  from the EC2 security group; the database password is a Parameter Store
+  SecureString; and the instance's IAM policy is scoped to
+  `/dc-intern/prod/*` read actions only.
+- **Frontend cloud deployment remained for Day 5.** At the end of Day 4 the
+  React app still pointed at `http://127.0.0.1:8000/api`, so the deployed
+  backend had no deployed client.
 
-Full write-up, network diagram, request-flow diagram, verification checklist,
-and a table of common failure modes:
-[`docs/WEEK4_AI_AND_DEPLOYMENT.md`](docs/WEEK4_AI_AND_DEPLOYMENT.md)
+Full closeout review — AWS verification evidence, a 22-point checklist, four
+open items, and the evidence to capture for the internship report:
+[`docs/WEEK4_DAY4_DEPLOYMENT_REPORT.md`](docs/WEEK4_DAY4_DEPLOYMENT_REPORT.md)
 
-### Next Step — Day 5: Deploy the frontend and complete Week 4 documentation
+Design write-up, network diagram, request-flow diagram, and common failure
+modes: [`docs/WEEK4_AI_AND_DEPLOYMENT.md`](docs/WEEK4_AI_AND_DEPLOYMENT.md)
 
-Run the deployment on EC2 and verify it end to end, then build the React app
-against the deployed API (its base URL is still hard-coded to `127.0.0.1:8000`
-and needs to become a build-time variable), serve it, and point
-`CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS` at its real origin. After
-that: TLS plus `USE_HTTPS=True`, logs to CloudWatch, and the Week 4 report.
-Connecting a real, paid AI provider comes last, after a spending cap and rate
-limiting are in place.
+### Day 5 — Frontend production deployment, Amazon Bedrock, Week 4 closeout
+
+- **The frontend's API base URL is now a build-time variable.**
+  `VITE_API_BASE_URL` gives `http://127.0.0.1:8000/api` locally and `/api` in
+  production. **No IP address or hostname is compiled into the bundle** —
+  verified by building both ways and grepping the output. This also dissolved a
+  Day 4 blocker: the instance's public IP is ephemeral, so an absolute URL would
+  have been wrong after the next stop/start; a relative one cannot go stale.
+- **React and Django are served from one Nginx origin**, split by path: `/` and
+  `/assets/` from `/var/www/dc-intern`, `/static/` from Django's collected
+  files, and `/api/`, `/admin/`, `/api-auth/` proxied to Gunicorn on
+  `127.0.0.1:8000`. SPA fallback via `try_files`, fingerprinted assets cached for
+  a year, `index.html` served `no-cache`. One origin also means **no CORS in
+  production at all**.
+- **`deploy/scripts/deploy_frontend.sh`** installs with `npm ci`, builds, and
+  publishes to `/var/www/dc-intern` as `root:root` (Nginx reads; it must not be
+  able to rewrite the app's JavaScript), relabels for SELinux, validates and
+  reloads Nginx, and smoke-tests `/`, a deep link, and `/api/health/`.
+- **Amazon Bedrock added as the real AI provider**, through the Converse API and
+  the EC2 instance's IAM role — **there is no AWS access key anywhere in this
+  project**, and none should ever be added. `AI_PROVIDER`, `AI_MODEL`,
+  `AWS_BEDROCK_REGION`, `AI_MAX_TOKENS`, `AI_TEMPERATURE`, and
+  `AI_FALLBACK_TO_MOCK` control it; `mock` remains the default everywhere,
+  including in every test.
+- **The prompt lives in its own reviewable module** (`services/prompts.py`). It
+  sends field of study, year, career interest, internship goal, skills with
+  confidence levels, and the student's career text — **not the student's name**,
+  which the analysis does not need — and instructs the model not to guarantee
+  employment, invent qualifications, discriminate, or request extra personal
+  data.
+- **Failure handling is honest by construction.** AWS error detail never reaches
+  the browser (codes map to written-for-users messages; only the code is
+  logged). When Bedrock fails with `AI_FALLBACK_TO_MOCK=True`, four separate
+  things say so: `provider: "mock"`, `fallback_used: true`, a `notes` entry, and
+  a banner in the saved text. With `False`, a clean `503`.
+- **Tested: 26 → 57 automated tests**, covering the prompt, the Bedrock request
+  shape, response extraction, every error path, and both fallback modes — none
+  of them touching AWS. One test fails deliberately if any boto3 client is
+  constructed during the run.
+- **Documented:** `AI_PROMPT_DOCUMENTATION.md`, `WEEK4_DEPLOYMENT_NOTES.md`, and
+  `WEEK4_WEEKLY_REPORT.md`, plus updates to all three READMEs.
+
+### Next Step — Week 5
+
+1. Run the frontend deployment on the instance and capture the evidence.
+2. Add authentication, then rate limiting on the AI endpoint — both are
+   prerequisites for enabling a paid provider on a public endpoint.
+3. Add TLS, then `USE_HTTPS=True`.
+4. Enable Bedrock with a `bedrock:InvokeModel` permission scoped to the single
+   model ARN, test with an invented profile, and record the first real response.
+5. Allocate an Elastic IP for a stable demonstration link.
+6. Ship application logs to CloudWatch.

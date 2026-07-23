@@ -38,6 +38,12 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
         returns it. A missing profile yields 404 (handled by `get_object`);
         a missing profile skills/career inputs still produces a limited
         analysis, flagged in `notes`.
+
+        The response carries `provider`, `model`, and `fallback_used` so a
+        client — or a marker reading a screenshot — can always tell what
+        produced the text. These are names and booleans only: no credential, no
+        region, no account id, no request id, nothing about how the call was
+        made.
         """
         profile = self.get_object()
 
@@ -72,6 +78,13 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        if result.get('fallback_reason'):
+            notes.append(
+                'The configured AI provider was unavailable, so this analysis was '
+                'produced by the local rule-based analyser instead of an AI model. '
+                f'Reason: {result["fallback_reason"]}'
+            )
+
         recommendation = Recommendation.objects.create(
             student_profile=profile,
             recommendation_type=Recommendation.RecommendationType.SKILL_GAP_ANALYSIS,
@@ -85,6 +98,12 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
                 'recommendation_type': recommendation.recommendation_type,
                 'content': recommendation.content,
                 'created_at': recommendation.created_at,
+                # Safe metadata: which implementation actually produced the text.
+                'provider': result['provider'],
+                'model': result['model'],
+                'fallback_used': result['used_fallback'],
+                # Same three values under their pre-Day-5 names, kept so nothing
+                # already reading this endpoint breaks.
                 'ai_provider': result['provider'],
                 'ai_model': result['model'],
                 'used_fallback': result['used_fallback'],

@@ -1,4 +1,4 @@
-# Nginx site for the DC-Intern backend.
+# Nginx site for DC-Intern: React frontend + Django backend on ONE origin.
 #
 # This is a TEMPLATE. Replace SERVER_NAME_PLACEHOLDER with the instance's public
 # DNS name or domain before installing it, e.g.:
@@ -6,12 +6,29 @@
 #   sed 's/SERVER_NAME_PLACEHOLDER/ec2-1-2-3-4.compute-1.amazonaws.com/' \
 #       /opt/dc-intern/deploy/nginx/dc-intern.conf.template \
 #     | sudo tee /etc/nginx/conf.d/dc-intern.conf > /dev/null
-#   sudo nginx -t && sudo systemctl restart nginx
+#   sudo nginx -t && sudo systemctl reload nginx
 #
 # deploy/scripts/deploy_backend.sh does this for you via the SERVER_NAME variable.
 #
 # Whatever name is used here must also appear in ALLOWED_HOSTS (and, for the
 # admin site, in CSRF_TRUSTED_ORIGINS with a scheme) in /etc/dc-intern/backend.env.
+#
+# ---------------------------------------------------------------------------
+# Routing map — one origin, split by path prefix
+# ---------------------------------------------------------------------------
+#
+#   /            -> React single-page app from /var/www/dc-intern
+#   /assets/     -> React's hashed JS/CSS bundles (immutable, cached hard)
+#   /api/        -> Gunicorn (Django REST Framework)
+#   /admin/      -> Gunicorn (Django admin)
+#   /api-auth/   -> Gunicorn (DRF login views, if they are ever enabled)
+#   /static/     -> Django's collectstatic output (admin + browsable API assets)
+#
+# Serving both halves from one origin is the point of this file. Because the
+# browser calls its own origin, the frontend is built with VITE_API_BASE_URL=/api
+# and contains no hostname or IP address; there are no cross-origin requests, so
+# no CORS preflight and no origin list to keep in step; and adding TLS later
+# secures both halves at once.
 #
 # HTTP only for now: TLS is not configured yet, so there is no port 443 block
 # and no HTTP->HTTPS redirect. Both are added on the day a certificate exists,
@@ -39,9 +56,40 @@ server {
     # Do not advertise the exact Nginx version in responses.
     server_tokens off;
 
-    # Static files collected by `manage.py collectstatic`. With DEBUG=False
-    # Django will not serve these itself — Nginx must. Mainly the Django admin
-    # and the DRF browsable API.
+    # The React production build: `npm run build` output copied here by
+    # deploy/scripts/deploy_frontend.sh. Static files only — no server-side
+    # rendering, no Node process in production.
+    root /var/www/dc-intern;
+    index index.html;
+
+    # --- React single-page app --------------------------------------------
+    # try_files falls back to index.html so a deep link or a refresh on a
+    # client-side route returns the app instead of a 404. It is listed last, so
+    # a request for a file that exists is still served as that file.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Vite fingerprints these filenames (index-a1b2c3d4.js), so the content at a
+    # given URL can never change: cache it for a year. A new deployment produces
+    # new filenames, which is what makes a hard cache safe here.
+    location /assets/ {
+        access_log off;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # index.html is NOT fingerprinted, and it is what points at the hashed
+    # bundles. If a browser caches it, users keep loading the previous release.
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
+    # --- Django static files ----------------------------------------------
+    # Collected by `manage.py collectstatic`. With DEBUG=False Django will not
+    # serve these itself — Nginx must. Mainly the Django admin and the DRF
+    # browsable API. Distinct from /assets/, which belongs to React.
     location /static/ {
         alias /opt/dc-intern/backend/staticfiles/;
         access_log off;
@@ -49,7 +97,8 @@ server {
         add_header Cache-Control "public";
     }
 
-    location / {
+    # --- Django application ------------------------------------------------
+    location /api/ {
         proxy_pass http://dc_intern_backend;
         proxy_http_version 1.1;
 
@@ -66,9 +115,48 @@ server {
 
         proxy_connect_timeout 10s;
         proxy_send_timeout    60s;
-        # 60s is generous for the current mock AI response, which is instant.
-        # Raise this when a real AI provider is connected — model calls can take
-        # longer than a minute, and a 504 here looks like an application bug.
+        # An Amazon Bedrock call is the slowest thing this application does. 120s
+        # is generous for amazon.nova-micro-v1:0 and still bounded — a 504 here
+        # would look to a student like an application bug rather than a slow
+        # model. Gunicorn's own --timeout (60s in the systemd unit) is the
+        # tighter limit; raise that too if a larger model is ever configured.
+        proxy_read_timeout    120s;
+    }
+
+    location /admin/ {
+        proxy_pass http://dc_intern_backend;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+
+        proxy_redirect off;
+
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    60s;
+        proxy_read_timeout    60s;
+    }
+
+    # DRF's browsable-API login views. They are not wired into config/urls.py
+    # today, so this currently reaches Django and returns a clean 404 — which is
+    # correct, and means enabling them later needs no Nginx change.
+    location /api-auth/ {
+        proxy_pass http://dc_intern_backend;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+
+        proxy_redirect off;
+
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    60s;
         proxy_read_timeout    60s;
     }
 }

@@ -4,3 +4,7 @@ django-cors-headers==4.9.0
 python-decouple==3.8
 psycopg[binary]==3.3.4
 gunicorn==26.0.0
+# AWS SDK — used only by the Amazon Bedrock provider in career/services/ai_service.py.
+# Installed unconditionally so `AI_PROVIDER=bedrock` is a config change, not a
+# redeploy; it is imported lazily, so mock mode never loads it.
+boto3==1.42.10

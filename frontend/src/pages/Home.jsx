@@ -43,7 +43,7 @@ function Home() {
           and goals into personalized recommendations.
         </p>
 
-        <div className="status-badge">Week 4 — Local Build with AI-Assisted Skill Gap Analysis</div>
+        <div className="status-badge">Week 4 — AI-Assisted Skill Gap Analysis</div>
 
         <div className="workflow">
           <h2>MVP Workflow Status</h2>

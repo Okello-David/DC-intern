@@ -14,8 +14,12 @@ Week 4 is split across days:
 | Day 1 | AWS account safety: MFA, budget alert, credit check, AWS CLI profile | Done |
 | Day 2 | First AI feature (Skill Gap Analysis) locally + production-ready Django settings | Done |
 | Day 3 | VPC, subnets, security groups, private Amazon RDS PostgreSQL + Django PostgreSQL support | Done |
-| Day 4 | Deploy Django to EC2: Gunicorn, Nginx, systemd, production settings | Done (repository prepared) |
-| Day 5+ | Deploy the frontend, complete Week 4 documentation | Next |
+| Day 4 | Deploy Django to EC2: Gunicorn, Nginx, systemd, production settings | **Deployed and verified** |
+| Day 5 | Frontend production build + one-origin Nginx, Amazon Bedrock provider, Week 4 documentation | Code complete; frontend not yet published on the instance, Bedrock not yet enabled |
+
+Day 5 detail is in this document under [Day 5](#day-5--frontend-production-build-and-a-real-ai-provider);
+the operational write-up is in [`WEEK4_DEPLOYMENT_NOTES.md`](WEEK4_DEPLOYMENT_NOTES.md),
+and the prompt itself in [`AI_PROMPT_DOCUMENTATION.md`](AI_PROMPT_DOCUMENTATION.md).
 
 ---
 
@@ -86,14 +90,21 @@ Skill Gap Analysis"
                         2. load profile.skills + profile.career_inputs
                         3. call ai_service.generate_skill_gap_analysis()
                                 │
-                                ├─ AI_PROVIDER=mock or no API key
+                                ├─ AI_PROVIDER=mock
                                 │    └─► build_local_analysis()  (no network call)
                                 │
-                                └─ real provider configured
-                                     └─ build_prompt() ────────────►  API call
-                                                                      (key read
-                                                                       from server
-                                        text response  ◄───────────    environment)
+                                └─ AI_PROVIDER=bedrock
+                                     └─ build_skill_gap_prompt()
+                                          └─ boto3 converse() ────►  Bedrock
+                                                                     (IAM role,
+                                                                      no API key)
+                                        text response  ◄───────────
+                                             │
+                                             └─ on failure:
+                                                AI_FALLBACK_TO_MOCK=True
+                                                  -> labelled local analysis
+                                                AI_FALLBACK_TO_MOCK=False
+                                                  -> clean 503
                         4. save a Recommendation row
                         5. return JSON
       │
@@ -109,8 +120,11 @@ Response shape:
   "profile_id": 1,
   "recommendation_id": 3,
   "recommendation_type": "Skill Gap Analysis",
-  "content": "SKILL GAP ANALYSIS\nStudent: ...",
-  "created_at": "2026-07-22T10:31:57.802323Z",
+  "content": "1. CAREER READINESS SUMMARY\n...",
+  "created_at": "2026-07-23T10:31:57.802323Z",
+  "provider": "mock",
+  "model": "mock-local",
+  "fallback_used": true,
   "ai_provider": "mock",
   "ai_model": "mock-local",
   "used_fallback": true,
@@ -118,8 +132,12 @@ Response shape:
 }
 ```
 
-`used_fallback` tells the UI (and any reviewer) honestly whether a real AI model
-was involved. `notes` explains any limitation, e.g. a profile with no skills.
+`provider` reports **what actually ran**, not what was configured — so a Bedrock
+failure that falls back reads `mock` with `fallback_used: true`, never the other
+way round. `notes` explains any limitation: a profile with no skills, or the
+reason a fallback fired. (`ai_provider` / `ai_model` / `used_fallback` are the
+same three values under their pre-Day-5 names, kept so nothing already reading
+this endpoint breaks.)
 
 ---
 
@@ -161,9 +179,13 @@ locally, and in the server environment on AWS.
 | `SECRET_KEY` | Django cryptographic signing key. | dev placeholder |
 | `ALLOWED_HOSTS` | Comma-separated hostnames Django will serve. | `127.0.0.1,localhost` |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated frontend origins allowed to call the API. | `http://localhost:5173,http://127.0.0.1:5173` |
-| `AI_PROVIDER` | Which AI implementation to use. `mock` = local fallback, no network call. | `mock` |
-| `AI_API_KEY` | Provider API key. Server-side only; empty in mock mode. | *(empty)* |
-| `AI_MODEL` | Model identifier passed to the provider. | `mock-local` |
+| `AI_PROVIDER` | Which AI implementation to use: `mock` (no network call) or `bedrock`. | `mock` |
+| `AI_MODEL` | Model identifier passed to the provider. Production plan: `amazon.nova-micro-v1:0`. | `mock-local` |
+| `AWS_BEDROCK_REGION` | Region whose Bedrock endpoint is called. | `eu-north-1` |
+| `AI_MAX_TOKENS` | Response cap — a formatting limit and a cost limit. | `1200` |
+| `AI_TEMPERATURE` | Sampling temperature; low for factual, repeatable output. | `0.2` |
+| `AI_FALLBACK_TO_MOCK` | On provider failure: `True` → labelled local analysis, `False` → clean `503`. | `True` |
+| `AI_API_KEY` | Unused by `mock` and `bedrock`; reserved for a future key-based provider. **Bedrock uses the EC2 IAM role, not a key.** | *(empty)* |
 | `DB_HOST` | **The database switch.** Empty → SQLite. Set → PostgreSQL on RDS. | *(empty)* |
 | `DB_NAME` | PostgreSQL database name. | *(unused locally)* |
 | `DB_USER` | PostgreSQL username. | *(unused locally)* |
@@ -192,8 +214,9 @@ source venv/bin/activate
 python manage.py test
 ```
 
-Expected: `Ran 26 tests ... OK`. These require no database server, no RDS
-instance, and no network access.
+Expected: `Ran 57 tests ... OK`. These require no database server, no RDS
+instance, no AWS credentials, and no network access. One of them fails
+deliberately if any boto3 client is constructed during the run.
 
 ### Manual
 
@@ -378,12 +401,32 @@ credentials were written to any file.
 
 ## Day 4 — Deploy the Django Backend to Amazon EC2
 
+> **Day 4 is complete and deployed.** The backend runs on EC2 in eu-north-1,
+> behind Nginx, connected to the private RDS PostgreSQL instance, with
+> migrations applied and the public health endpoint returning `200`. The full
+> closeout review — AWS verification evidence, the 22-point checklist, the
+> findings, and the evidence list for the internship report — is in
+> [`WEEK4_DAY4_DEPLOYMENT_REPORT.md`](WEEK4_DAY4_DEPLOYMENT_REPORT.md).
+>
+> Verified live: EC2 `running` with an IAM instance profile and the SSM agent
+> online; the EC2 security group carrying exactly one inbound rule (TCP 80 — no
+> SSH, no 8000, no 5432); `dc-intern-postgres` `available`, not publicly
+> accessible, storage encrypted, and reachable only from the EC2 security group;
+> all four CRUD endpoints and the static files served correctly.
+>
+> The review raised four items. Two were fixed immediately in the repository:
+> the deploy script now defaults to and enforces Python 3.12 (Django 6 requires
+> it, and Amazon Linux 2023's `python3` is 3.9), and `.gitignore` now matches
+> `*.env` so a copy of `backend.env` cannot be committed. Two remain open
+> because they need AWS changes, and neither is blocking: the public **DNS
+> name** returns `400` because only the IP is in `ALLOWED_HOSTS`, and the public
+> IP is not an Elastic IP, so it changes on stop/start.
+
 ### Objective
 
-Make the repository deployable: production Django settings, a Gunicorn service,
-an Nginx site, and a repeatable deploy script — so that running one command on
-the instance produces a working backend. **The repository work is complete; no
-AWS resources were created and nothing has been deployed yet.**
+Make the repository deployable and deploy it: production Django settings, a
+Gunicorn service, an Nginx site, and a repeatable deploy script — so that
+running one command on the instance produces a working backend.
 
 ### Who does what
 
@@ -567,9 +610,12 @@ tells you *where* the problem is.
 
 ## Current Limitations
 
-- **No real AI provider is connected yet.** `AI_PROVIDER=mock` returns a
-  rule-based local analysis. A provider has not been approved on cost grounds,
-  and `_call_provider()` in `ai_service.py` is a documented stub.
+- **Amazon Bedrock is implemented but has never been called.** The provider,
+  the prompt, the error handling, and the tests exist (Day 5), but model access
+  has not been requested in the account, `dc-intern-ec2-role` has no
+  `bedrock:InvokeModel` permission, and `AI_PROVIDER` stays `mock`. **No claim
+  is made that a Bedrock call has succeeded**, and the quality of real model
+  output is unassessed.
 - **The mock analyser is rule-based**, so it only reasons about the skills listed
   in `ROLE_PROFILES`. It matches skills by name, so unusual spellings may be
   reported as missing.
@@ -579,9 +625,13 @@ tells you *where* the problem is.
   Adding auth is required before this is exposed publicly.
 - **No rate limiting.** Once a paid provider is connected, the endpoint needs a
   throttle so repeated clicks cannot run up a bill.
-- **Still SQLite in practice.** PostgreSQL support is written and tested, but no
-  migration has been run against RDS and no application has connected to it. The
-  PostgreSQL code path has only been exercised against a placeholder host.
+- **No model-output validation.** A Bedrock response is saved and displayed as
+  returned; nothing checks that all eight sections are present or that no
+  employment guarantee slipped past the prompt's prohibitions.
+- **Career input is untrusted text placed in a prompt.** Truncation bounds it,
+  but nothing else sanitises it, so prompt injection is possible. The blast
+  radius is small — a bad analysis returned to the student who caused it, and
+  output is rendered as plain text — but it is a real gap.
 - **No connection pooler.** `CONN_MAX_AGE=60` is per Gunicorn worker, so total
   connections scale with worker count. If workers are scaled up, RDS connection
   limits need checking (PgBouncer or RDS Proxy is the answer, not more workers).
@@ -597,9 +647,10 @@ tells you *where* the problem is.
   a browser and EC2 is unencrypted. `USE_HTTPS` is the switch that fixes this
   once a certificate exists; until then, do not use the deployment for anything
   involving real personal data.
-- **No deployment has actually been run.** Every file in `deploy/` has been
-  syntax-checked and the script's preflight and Django stages were exercised
-  locally against a scratch copy, but no EC2 instance has executed it.
+- **The frontend deployment script has not been run on the instance.**
+  `deploy/scripts/deploy_frontend.sh` is syntax-checked and the build it
+  performs has been run locally in both modes, but no EC2 instance has executed
+  it. The backend script has (Day 4).
 - **The deploy script assumes `git pull` has already happened** and has no
   rollback step. If a deployment fails after `migrate`, recovery is manual.
 - **No process supervision beyond `Restart=on-failure`** and no health check
@@ -647,23 +698,181 @@ reachable from.
    environment file sourced).
 7. Work through the verification checklist above.
 
-## Next Step — Day 5: Deploy the Frontend and Complete Week 4 Documentation
+## Day 5 — Frontend Production Build and a Real AI Provider
 
-1. Build the React app (`npm run build`) with the API base URL pointing at the
-   deployed backend instead of `127.0.0.1:8000` — it is currently hard-coded in
-   `frontend/src/services/api.js` and needs to become a build-time variable.
-2. Serve the built frontend: either from Nginx on the same instance, or from S3
-   (with CloudFront later). Decide and document the trade-off.
-3. Set `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS` to the frontend's real
-   origin and restart the backend service.
-4. Verify the full user journey against the deployed stack: create a profile,
-   add skills, add a career input, generate a skill-gap analysis.
-5. Add TLS (certificate + port 443 server block + redirect), then set
-   `USE_HTTPS=True` and re-run `manage.py check --deploy` — the four expected
-   warnings should disappear.
-6. Ship application logs to CloudWatch and confirm the billing alert still
-   reflects the running resources.
-7. Complete the Week 4 report: architecture as-built, screenshots, costs, and
-   the security decisions taken.
-8. Only after all of the above, evaluate connecting a real AI provider — with a
-   spending cap and endpoint rate limiting in place first.
+> **What ran, and what did not.** The code, configuration, tests, and
+> documentation below are complete and verified locally. The frontend deployment
+> script has **not** been executed on the EC2 instance, and **no Amazon Bedrock
+> request has ever been made from this project.** Both are one operational step
+> away; neither has a production result to show.
+
+### Objective
+
+Two things Week 4 was still missing: a deployed client for the deployed backend,
+and a real AI provider behind the Skill Gap Analysis feature.
+
+### The frontend's API base URL became a build-time variable
+
+`frontend/src/services/api.js` had `http://127.0.0.1:8000/api` hard-coded. It now
+reads:
+
+```js
+export const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
+```
+
+| Environment | `VITE_API_BASE_URL` | Result |
+|---|---|---|
+| Local development | unset | `http://127.0.0.1:8000/api` — Vite on `:5173`, Django on `:8000`, CORS allows it |
+| Production | `/api` | Same origin as the page; Nginx proxies it to Gunicorn |
+
+**Why relative, and not the instance's address.** The Day 4 review found the
+public IP is not an Elastic IP, so it changes on every stop/start. An absolute
+URL compiled into the bundle would be wrong after the next restart. A relative
+`/api` cannot go stale: it follows whatever address the page was loaded from,
+including a domain name and HTTPS later. Verified by building both ways and
+grepping the output — the production bundle contains `/api` and no IP, hostname,
+or `127.0.0.1`.
+
+`frontend/.env.example` documents the one variable. Real `.env*` files are
+git-ignored (verified with `git check-ignore`), though the more important point
+is that **no secret may go in a `VITE_*` variable at all**: everything Vite
+inlines is downloaded by every visitor.
+
+### One origin for React and Django
+
+`deploy/nginx/dc-intern.conf.template` now serves both halves from one server
+block, split by path prefix: `/` and `/assets/` from `/var/www/dc-intern`,
+`/static/` from Django's `staticfiles/`, and `/api/`, `/admin/`, `/api-auth/`
+proxied to Gunicorn on `127.0.0.1:8000`.
+
+Three details that matter:
+
+- **`try_files $uri $uri/ /index.html`.** A client-side route is not a file on
+  disk, so without this a refresh or a shared deep link returns 404.
+- **`/assets/` cached for a year as `immutable`; `/index.html` `no-cache`.**
+  Vite fingerprints bundle filenames, so their content can never change — but
+  `index.html` is *not* fingerprinted and is what points at them. Caching it
+  would pin returning visitors to the previous release.
+- **CORS disappears in production.** Same origin means no cross-origin request,
+  no preflight, and no origin list to keep in step with the server.
+  `CORS_ALLOWED_ORIGINS` still matters locally, where Vite and Django are on
+  different ports.
+
+`deploy/scripts/deploy_frontend.sh` installs with `npm ci`, builds with
+`VITE_API_BASE_URL=/api`, publishes `dist/` to `/var/www/dc-intern` as
+`root:root` `644`/`755` (Nginx reads; it must not be able to write the
+application's JavaScript), relabels for SELinux, runs `nginx -t`, reloads, and
+smoke-tests `/`, a deep link, and `/api/health/`. It fails the deployment if
+`127.0.0.1:8000` appears in a same-origin build — the signature of a stale
+`frontend/.env`.
+
+### Amazon Bedrock as the real provider
+
+```
+AI_PROVIDER=mock      -> build_local_analysis()      no network call, zero cost
+AI_PROVIDER=bedrock   -> bedrock-runtime.converse()  IAM role, no API key
+```
+
+**Why Bedrock over a key-based API.** The application already runs on EC2 with
+an instance role, and Bedrock is reachable with that role. There is therefore
+**no API key** — nothing to store in `/etc/dc-intern/backend.env`, nothing to
+rotate, nothing to leak. The credentials boto3 obtains are temporary and cannot
+be used off the instance. A leaked key from a key-based provider works from
+anywhere until someone notices the bill.
+
+**Why the Converse API.** One request/response shape across every Bedrock model,
+so changing model is an `AI_MODEL` change with no code change and no per-vendor
+JSON body.
+
+| Setting | Value | Reason |
+|---|---|---|
+| `AI_MODEL` | `amazon.nova-micro-v1:0` | Cheapest text model in the Nova family; the task is short structured writing, not heavy reasoning |
+| `AI_TEMPERATURE` | `0.2` | Factual guidance about a real person — conservative and repeatable beats creative |
+| `AI_MAX_TOKENS` | `1200` | Eight sections fit; also a per-request cost cap |
+| `AWS_BEDROCK_REGION` | `eu-north-1` | Where model access will be enabled |
+| `AI_FALLBACK_TO_MOCK` | `True` | Keeps the feature usable during an outage — labelled, never disguised |
+
+The prompt lives in its own module, `backend/career/services/prompts.py`, so it
+can be reviewed without reading AWS code. It sends field of study, year, career
+interest, internship goal, skills with confidence levels, and the student's own
+career/resume text — **not** their name, which the analysis does not need. Career
+input is truncated to 1500 characters per entry. The system instruction forbids
+guaranteeing employment, inventing qualifications, discriminating, and asking for
+extra personal data, and specifies the eight output sections. Full write-up:
+[`AI_PROMPT_DOCUMENTATION.md`](AI_PROMPT_DOCUMENTATION.md).
+
+### Failures are contained, and fallbacks are never disguised
+
+- `ClientError` codes map to written-for-users messages ("The AI service is busy
+  right now"); unknown codes get a generic one. The AWS payload never reaches the
+  browser and is logged as a **code only**.
+- Prompts and responses are never logged. A test fails if student-written text
+  reaches the log.
+- On failure with `AI_FALLBACK_TO_MOCK=True`, four independent things say so:
+  the response's `provider` reads `mock`, `fallback_used` is `true`, `notes`
+  carries the reason, and the saved content itself begins with a
+  `NOTE — FALLBACK MODE` banner. With `False`, the endpoint returns a clean
+  `503` and saves nothing.
+- The local analyser now emits the **same eight sections** as the model prompt,
+  so a fallback is structurally identical and the UI needs no special case.
+
+### Testing
+
+57 tests (up from 26), none of which touch AWS:
+
+| Area | Covered |
+|---|---|
+| Mock mode | Output, structure, honest metadata, and that no AWS client is built |
+| Bedrock success | `modelId`, `system`, `messages`, and `inferenceConfig` sent; text and metadata returned |
+| Response extraction | Single block, multiple blocks, non-text blocks, `max_tokens`, empty and malformed responses |
+| Error handling | `ClientError` per code, `BotoCoreError`, unexpected SDK errors, missing region — and that no ARN or account id leaks |
+| Fallback | `True` returns a labelled mock; `False` raises and the endpoint returns `503` |
+| Endpoint metadata | `provider`, `model`, `fallback_used` for both success and fallback |
+| No real AWS call | `boto3.client` is replaced with a function that fails the test if called |
+| Prompt | Required fields present, the student's name absent, truncation, empty-input labelling |
+
+### Frontend production readiness
+
+Spinner and `aria-live` status while generating; written-for-users error
+messages with a "Try again" action (a network failure, a proxy's HTML error page,
+and a Django traceback all become plain sentences); line breaks preserved via
+`white-space: pre-wrap`; an honest provider label; and a standing disclaimer
+under every result stating that the analysis is AI-assisted, unverified, not a
+guarantee of employment, and should be reviewed with a lecturer or mentor.
+
+### Day 5 files
+
+```
+backend/career/services/prompts.py          new — system instruction + prompt builder
+backend/career/services/ai_service.py       Bedrock provider, dispatch, fallback
+backend/career/views.py                     provider/model/fallback_used metadata
+backend/config/settings.py                  5 new AI_* / AWS_* settings
+backend/requirements.txt                    boto3
+backend/career/tests.py                     26 -> 57 tests
+frontend/src/services/api.js                VITE_API_BASE_URL + safe error text
+frontend/src/components/AIRecommendationPanel.jsx  loading, errors, disclaimer
+frontend/.env.example                       new
+deploy/nginx/dc-intern.conf.template        one-origin routing, SPA fallback
+deploy/scripts/deploy_frontend.sh           new
+deploy/scripts/deploy_backend.sh            web root + frontend hand-off
+docs/AI_PROMPT_DOCUMENTATION.md             new
+docs/WEEK4_DEPLOYMENT_NOTES.md              new
+docs/WEEK4_WEEKLY_REPORT.md                 new
+```
+
+## Next Step — Week 5
+
+1. Run `deploy/scripts/deploy_frontend.sh` on the instance and capture the
+   evidence: the app in a browser, and devtools showing same-origin `/api` calls.
+2. Add authentication, then rate limiting on the skill-gap endpoint. Both are
+   prerequisites for a paid provider on a public endpoint.
+3. Add TLS, then `USE_HTTPS=True`, then re-run `manage.py check --deploy` — the
+   four expected warnings should disappear.
+4. Enable Bedrock: request model access for `amazon.nova-micro-v1:0` in
+   `eu-north-1`, add `bedrock:InvokeModel` scoped to that single model ARN, test
+   with an invented profile, and record the first real response in
+   `AI_PROMPT_DOCUMENTATION.md`.
+5. Allocate an Elastic IP for a stable demonstration link.
+6. Ship application logs to CloudWatch and confirm the billing alert covers
+   everything now running.

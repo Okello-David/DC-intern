@@ -3,24 +3,41 @@
 Design rules for this module:
 
 * It runs **server-side only**. The React frontend calls the Django API; Django
-  calls the AI provider. The API key therefore never leaves the server.
-* It is **provider-agnostic**. `AI_PROVIDER` selects the implementation, so
-  swapping OpenAI / Gemini / Anthropic later touches this file and nothing else.
-* It always **degrades safely**. When `AI_PROVIDER=mock`, or when no `AI_API_KEY`
-  is configured, it returns a structured local analysis instead of failing, so
-  the feature can be demonstrated offline and at zero cost.
+  calls the AI provider. No credential of any kind ever leaves the server.
+* It is **provider-agnostic**. `AI_PROVIDER` selects the implementation:
+
+      AI_PROVIDER=mock      no network call at all; a local rule-based analysis
+      AI_PROVIDER=bedrock   Amazon Bedrock Runtime, via the Converse API
+
+* It always **degrades honestly**. When Bedrock fails and
+  `AI_FALLBACK_TO_MOCK=True`, the local analysis is returned *labelled as a
+  fallback* — the caller is told which provider actually produced the text, so
+  a mock response is never presented as a model response.
+* It **never** handles AWS access keys. On EC2, boto3 picks up credentials from
+  the instance's IAM role automatically; locally it uses whatever profile the
+  developer has already configured. There is no key in this file, in settings,
+  or in any environment variable this project defines.
 """
 
 import logging
 
 from django.conf import settings
 
+from .prompts import SYSTEM_INSTRUCTION, build_skill_gap_prompt
+
 logger = logging.getLogger(__name__)
+
+# Providers this module knows how to call. Anything else is a configuration
+# error, handled like any other provider failure.
+SUPPORTED_PROVIDERS = ('mock', 'bedrock')
 
 
 class AIServiceError(Exception):
     """Raised when an analysis cannot be produced.
 
+    The message is written to be safe to show a student: it names what failed in
+    plain language and never carries an AWS error payload, a request id, a model
+    identifier the user cannot act on, or anything derived from a credential.
     Views catch this and return a clean JSON error instead of a traceback.
     """
 
@@ -158,11 +175,11 @@ LIMITATIONS_NOTE = (
 )
 
 MOCK_LIMITATIONS_NOTE = (
-    'This response was produced by the local fallback analyser, not by an external AI '
-    'model, so no student data left this server and no API cost was incurred. It is '
-    'rule-based, which means it reasons only about the skills it knows to look for. '
-    'The structure is identical to what a real provider will return once one is '
-    'configured. ' + LIMITATIONS_NOTE
+    'This response was produced by the local rule-based analyser on this server, not '
+    'by an AI model, so no student data left the server and no API cost was incurred. '
+    'Being rule-based, it reasons only about the skills it knows to look for. It uses '
+    'the same eight sections as the Amazon Bedrock response, so the two are directly '
+    'comparable. ' + LIMITATIONS_NOTE
 )
 
 
@@ -179,96 +196,272 @@ def generate_skill_gap_analysis(student_profile, skills, career_inputs):
         career_inputs: an iterable of ``CareerInput`` instances (may be empty).
 
     Returns:
-        dict with keys ``content`` (the readable analysis text), ``provider``,
-        ``model``, and ``used_fallback`` (True when no external AI was called).
+        dict with keys:
+
+        ``content``           the readable analysis text
+        ``provider``          who actually produced it (``mock`` or ``bedrock``)
+        ``model``             the model identifier that actually produced it
+        ``used_fallback``     True when the local analyser produced the text
+        ``requested_provider``what ``AI_PROVIDER`` asked for
+        ``fallback_reason``   plain-language reason, or None
+
+        ``provider`` reports what *ran*, not what was configured. If Bedrock was
+        requested and failed, this says ``mock``.
 
     Raises:
-        AIServiceError: if a configured real provider fails.
+        AIServiceError: the configured provider failed and
+            ``AI_FALLBACK_TO_MOCK`` is False.
     """
     skills = list(skills or [])
     career_inputs = list(career_inputs or [])
 
     provider = (getattr(settings, 'AI_PROVIDER', 'mock') or 'mock').strip().lower()
-    api_key = (getattr(settings, 'AI_API_KEY', '') or '').strip()
-    model = getattr(settings, 'AI_MODEL', 'mock-local') or 'mock-local'
+    model = (getattr(settings, 'AI_MODEL', '') or 'mock-local').strip()
+    fallback_allowed = bool(getattr(settings, 'AI_FALLBACK_TO_MOCK', True))
 
-    if provider == 'mock' or not api_key:
-        if provider != 'mock':
-            logger.warning(
-                'AI_PROVIDER=%s but no AI_API_KEY is set; falling back to the local analyser.',
-                provider,
-            )
-        return {
-            'content': build_local_analysis(student_profile, skills, career_inputs),
-            'provider': 'mock',
-            'model': 'mock-local' if provider == 'mock' else f'{model} (unavailable)',
-            'used_fallback': True,
-        }
+    if provider == 'mock':
+        return _mock_result(student_profile, skills, career_inputs)
 
     try:
-        content = _call_provider(provider, model, api_key, student_profile, skills, career_inputs)
-    except AIServiceError:
-        raise
-    except Exception as exc:  # network errors, bad responses, SDK errors
-        logger.exception('AI provider %r failed while generating a skill-gap analysis.', provider)
-        raise AIServiceError(
-            f'The AI provider ({provider}) could not be reached. Please try again later.'
-        ) from exc
+        if provider == 'bedrock':
+            content = generate_with_bedrock(
+                build_skill_gap_prompt(student_profile, skills, career_inputs)
+            )
+        else:
+            raise AIServiceError(
+                f'AI_PROVIDER is set to an unsupported value. Supported values are: '
+                f'{", ".join(SUPPORTED_PROVIDERS)}.'
+            )
+    except AIServiceError as exc:
+        if not fallback_allowed:
+            raise
+        # The reason is deliberately the AIServiceError message, which is
+        # already scrubbed of AWS detail — see the class docstring.
+        logger.warning(
+            'AI provider %r unavailable; returning the local fallback analysis. Reason: %s',
+            provider, exc,
+        )
+        return _mock_result(
+            student_profile, skills, career_inputs,
+            requested_provider=provider,
+            fallback_reason=str(exc),
+        )
 
     return {
         'content': content,
         'provider': provider,
         'model': model,
         'used_fallback': False,
+        'requested_provider': provider,
+        'fallback_reason': None,
     }
 
 
-def build_prompt(student_profile, skills, career_inputs):
-    """Build the prompt a real provider would receive.
+def _mock_result(student_profile, skills, career_inputs,
+                 requested_provider='mock', fallback_reason=None):
+    """Build the local-analyser result, labelled honestly.
 
-    Kept separate so the prompt can be reviewed, tested, and reused across
-    providers — and so it is obvious exactly what student data is sent out.
+    When this is a *fallback* (a real provider was asked for and could not be
+    used), the banner at the top of the content says so. A reader of the saved
+    recommendation must never have to guess whether a model was involved.
     """
-    skill_lines = [
-        f'- {skill.name} ({skill.category}, {skill.confidence_level})'
-        for skill in skills
-    ] or ['- (none provided)']
-    input_lines = [
-        f'- {entry.input_type}: {entry.content}'
-        for entry in career_inputs
-    ] or ['- (none provided)']
+    content = build_local_analysis(student_profile, skills, career_inputs)
 
-    return (
-        'You are a careers advisor for university students in IT-related fields.\n'
-        'Produce a skill-gap analysis with these sections, in this order:\n'
-        '1. Career Readiness Summary\n2. Strengths\n3. Missing Technical Skills\n'
-        '4. Missing Professional Skills\n5. Suggested Projects\n'
-        '6. 4-Week Learning Plan\n7. Limitations\n\n'
-        'Be specific, encouraging, and realistic. Use plain text.\n\n'
-        f'Student: {student_profile.full_name}\n'
-        f'Field of study: {student_profile.field_of_study}\n'
-        f'Year of study: {student_profile.year_of_study}\n'
-        f'Career interest: {student_profile.career_interest}\n'
-        f'Internship goal: {student_profile.internship_goal}\n\n'
-        'Self-reported skills:\n' + '\n'.join(skill_lines) + '\n\n'
-        'Resume / career inputs:\n' + '\n'.join(input_lines) + '\n'
+    if fallback_reason:
+        content = (
+            'NOTE — FALLBACK MODE: the configured AI provider '
+            f'({requested_provider}) could not be used, so this analysis was '
+            'produced by the local rule-based analyser on this server. It is NOT '
+            'AI-model output.\n\n'
+        ) + content
+
+    return {
+        'content': content,
+        'provider': 'mock',
+        'model': 'mock-local',
+        'used_fallback': True,
+        'requested_provider': requested_provider,
+        'fallback_reason': fallback_reason,
+    }
+
+
+# --------------------------------------------------------------------------
+# Amazon Bedrock provider
+# --------------------------------------------------------------------------
+# Bedrock was chosen over a key-based provider for one reason above all: on EC2
+# it needs no API key. Access is granted by the instance's IAM role, so there is
+# no long-lived secret to store in /etc/dc-intern/backend.env, rotate, or leak.
+
+# Bedrock ClientError codes mapped to messages a student can act on. Anything
+# unlisted gets the generic message — an unfamiliar AWS error code is exactly
+# the case where the raw text must not be forwarded to a browser.
+_BEDROCK_ERROR_MESSAGES = {
+    'AccessDeniedException':
+        'The AI service is not authorised for this application yet. This is a '
+        'server configuration issue, not a problem with your profile.',
+    'ResourceNotFoundException':
+        'The configured AI model is not available in this region. This is a '
+        'server configuration issue.',
+    'ValidationException':
+        'The AI service rejected the request. Please try again; if it keeps '
+        'happening, report it.',
+    'ThrottlingException':
+        'The AI service is busy right now. Please wait a moment and try again.',
+    'ServiceQuotaExceededException':
+        'The AI service usage limit for this application has been reached. '
+        'Please try again later.',
+    'ModelTimeoutException':
+        'The AI service took too long to respond. Please try again.',
+    'ModelNotReadyException':
+        'The AI model is warming up. Please try again in a moment.',
+}
+
+_BEDROCK_GENERIC_ERROR = (
+    'The AI service could not be reached. Please try again later.'
+)
+
+
+def _bedrock_client():
+    """Create a Bedrock Runtime client.
+
+    boto3 resolves credentials itself, in its standard order — on EC2 that is
+    the instance's IAM role (``dc-intern-ec2-role``) via the instance metadata
+    service. **No access key is passed here, and none should ever be.**
+
+    boto3 is imported inside the function so that a `mock`-mode deployment (and
+    the test suite) never requires the SDK to be installed, and so that a
+    missing dependency surfaces as a clean AIServiceError instead of an import
+    error at startup.
+
+    Tests patch this function, which is what keeps a real AWS call impossible in
+    the automated suite.
+    """
+    region = (getattr(settings, 'AWS_BEDROCK_REGION', '') or '').strip()
+    if not region:
+        raise AIServiceError(
+            'The AI service is not fully configured on the server '
+            '(no Bedrock region set).'
+        )
+
+    try:
+        import boto3
+    except ImportError as exc:  # pragma: no cover - dependency is pinned
+        raise AIServiceError(
+            'The AI service is unavailable because a server dependency is missing.'
+        ) from exc
+
+    return boto3.client('bedrock-runtime', region_name=region)
+
+
+def generate_with_bedrock(prompt, system_instruction=SYSTEM_INSTRUCTION):
+    """Send one Converse request to Amazon Bedrock and return the text.
+
+    The Converse API is used rather than `invoke_model` because it gives one
+    request/response shape across every Bedrock model: swapping
+    `amazon.nova-micro-v1:0` for a Claude or Llama model becomes a change to the
+    `AI_MODEL` environment variable, with no code change and no per-vendor JSON
+    body to maintain.
+
+    Raises:
+        AIServiceError: for every failure mode, with a message that is safe to
+            show a user. AWS error details are logged, never returned.
+    """
+    try:
+        from botocore.exceptions import BotoCoreError, ClientError
+    except ImportError as exc:  # pragma: no cover - dependency is pinned
+        # Same treatment as a missing boto3: a clean provider failure, which the
+        # caller can fall back from, rather than a 500 from an import error.
+        raise AIServiceError(
+            'The AI service is unavailable because a server dependency is missing.'
+        ) from exc
+
+    model_id = (getattr(settings, 'AI_MODEL', '') or '').strip()
+    if not model_id:
+        raise AIServiceError(
+            'The AI service is not fully configured on the server (no model set).'
+        )
+
+    client = _bedrock_client()
+
+    try:
+        response = client.converse(
+            modelId=model_id,
+            system=[{'text': system_instruction}],
+            messages=[{'role': 'user', 'content': [{'text': prompt}]}],
+            inferenceConfig={
+                'maxTokens': int(getattr(settings, 'AI_MAX_TOKENS', 1200)),
+                # Low by design: this is factual guidance about a real person's
+                # skills, so predictable, conservative output beats creative
+                # output, and it reduces the chance of invented detail.
+                'temperature': float(getattr(settings, 'AI_TEMPERATURE', 0.2)),
+            },
+        )
+    except ClientError as exc:
+        code = exc.response.get('Error', {}).get('Code', 'Unknown')
+        # Log the error CODE only. The full response can echo request content,
+        # and the prompt contains the student's own career text.
+        logger.error('Bedrock converse failed for model %s with code %s.', model_id, code)
+        raise AIServiceError(_BEDROCK_ERROR_MESSAGES.get(code, _BEDROCK_GENERIC_ERROR)) from exc
+    except BotoCoreError as exc:
+        # Credential resolution, endpoint, connection, and timeout problems.
+        logger.error('Bedrock call failed: %s', type(exc).__name__)
+        raise AIServiceError(_BEDROCK_GENERIC_ERROR) from exc
+    except Exception as exc:  # anything unforeseen in the SDK
+        logger.exception('Unexpected error calling Bedrock (model %s).', model_id)
+        raise AIServiceError(_BEDROCK_GENERIC_ERROR) from exc
+
+    return _extract_bedrock_text(response)
+
+
+def _extract_bedrock_text(response):
+    """Pull the assistant's text out of a Converse response, defensively.
+
+    A Converse response looks like::
+
+        {'output': {'message': {'role': 'assistant',
+                                'content': [{'text': '...'}]}},
+         'stopReason': 'end_turn', 'usage': {...}}
+
+    but `content` can hold several blocks, and non-text blocks (tool use,
+    reasoning) may appear. Everything is read with `.get()` so a shape change in
+    the API surfaces as a clean error rather than a KeyError traceback.
+    """
+    blocks = (
+        (response or {})
+        .get('output', {})
+        .get('message', {})
+        .get('content', [])
     )
 
+    text = '\n'.join(
+        block['text'].strip()
+        for block in blocks
+        if isinstance(block, dict) and isinstance(block.get('text'), str) and block['text'].strip()
+    ).strip()
 
-def _call_provider(provider, model, api_key, student_profile, skills, career_inputs):
-    """Dispatch to a real AI provider.
+    if not text:
+        logger.error(
+            'Bedrock returned no usable text (stopReason=%s).',
+            (response or {}).get('stopReason'),
+        )
+        raise AIServiceError(
+            'The AI service returned an empty response. Please try again.'
+        )
 
-    Nothing is implemented yet by design — Week 4 Day 2 is a local milestone and
-    a provider has not been approved. Adding one means writing a single function
-    here that takes ``build_prompt(...)`` and returns text; no other file in the
-    project changes.
-    """
-    prompt = build_prompt(student_profile, skills, career_inputs)  # noqa: F841 - used by real providers
+    if (response or {}).get('stopReason') == 'max_tokens':
+        text += (
+            '\n\n[The response reached the configured length limit and may be '
+            'cut short.]'
+        )
 
-    raise AIServiceError(
-        f'AI provider {provider!r} is configured but no client is implemented yet. '
-        'Set AI_PROVIDER=mock to use the local analyser.'
+    # Usage is safe to log — token counts, no content.
+    usage = (response or {}).get('usage', {})
+    logger.info(
+        'Bedrock analysis generated (input_tokens=%s, output_tokens=%s, chars=%s).',
+        usage.get('inputTokens'), usage.get('outputTokens'), len(text),
     )
+
+    return text
 
 
 # --------------------------------------------------------------------------
@@ -409,8 +602,8 @@ def build_local_analysis(student_profile, skills, career_inputs):
             )
     lines.append('')
 
-    # --- 2. Strengths -----------------------------------------------------
-    lines.append('2. STRENGTHS')
+    # --- 2. Current Strengths ---------------------------------------------
+    lines.append('2. CURRENT STRENGTHS')
     if strengths:
         for skill in strengths:
             evidence = f' — evidence: {skill.evidence.strip()}' if skill.evidence.strip() else ''
@@ -453,8 +646,8 @@ def build_local_analysis(student_profile, skills, career_inputs):
         lines.append('   You have reported the main professional skills. Keep evidencing them.')
     lines.append('')
 
-    # --- 5. Suggested Projects --------------------------------------------
-    lines.append('5. SUGGESTED PROJECTS')
+    # --- 5. Recommended Projects ------------------------------------------
+    lines.append('5. RECOMMENDED PROJECTS')
     for project in role_profile['projects']:
         lines.append(f'   - {project}')
     lines.append(
@@ -467,8 +660,8 @@ def build_local_analysis(student_profile, skills, career_inputs):
         )
     lines.append('')
 
-    # --- 6. 4-Week Learning Plan ------------------------------------------
-    lines.append('6. 4-WEEK LEARNING PLAN')
+    # --- 6. Four-Week Learning Plan ---------------------------------------
+    lines.append('6. FOUR-WEEK LEARNING PLAN')
     focus = missing_technical or role_profile['technical_skills']
     week_one = focus[0] if focus else 'your strongest existing skill'
     week_two = focus[1] if len(focus) > 1 else week_one
@@ -498,8 +691,32 @@ def build_local_analysis(student_profile, skills, career_inputs):
     lines.append('   Budget roughly 8-10 focused hours per week and protect that time.')
     lines.append('')
 
-    # --- 7. Limitations ---------------------------------------------------
-    lines.append('7. LIMITATIONS')
+    # --- 7. Internship Preparation Actions --------------------------------
+    lines.append('7. INTERNSHIP PREPARATION ACTIONS')
+    lines.append(
+        '   - Write a one-page CV that lists your strongest skills first and links to '
+        'your GitHub profile.'
+    )
+    lines.append(
+        '   - Make sure every repository you would show an employer has a README that '
+        'explains what the project does and how to run it.'
+    )
+    lines.append(
+        f'   - Prepare a two-minute spoken answer to "why {target_role.lower()}?" that '
+        'uses one of your own projects as evidence.'
+    )
+    lines.append(
+        '   - Identify three organisations that take interns in this area and note what '
+        'each of them asks for.'
+    )
+    lines.append(
+        '   - Ask a lecturer or mentor to review this analysis and your CV before you '
+        'apply.'
+    )
+    lines.append('')
+
+    # --- 8. Limitations ---------------------------------------------------
+    lines.append('8. LIMITATIONS')
     lines.append(f'   {MOCK_LIMITATIONS_NOTE}')
 
     return '\n'.join(lines)
